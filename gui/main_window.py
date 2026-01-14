@@ -3,19 +3,51 @@ import shutil
 from datetime import datetime
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QPushButton, QLabel, QTextEdit, QComboBox, QFileDialog,
-                             QScrollArea, QFrame)
-from PyQt5.QtCore import Qt
+                             QScrollArea, QFrame, QMessageBox)
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from gui.custom_widgets import LogPanel, ImageCanvas
+from generation.video_generator import generate_video_from_snippets
+
+class VideoGeneratorWorker(QThread):
+    """Background thread for video generation."""
+    finished = pyqtSignal(bool, str)
+    progress = pyqtSignal(str)
+    
+    def __init__(self, image_path, snippets, output_path, aspect_ratio):
+        super().__init__()
+        self.image_path = image_path
+        self.snippets = snippets
+        self.output_path = output_path
+        self.aspect_ratio = aspect_ratio
+    
+    def run(self):
+        self.progress.emit("Generating video with Ken Burns effect...")
+        success, message = generate_video_from_snippets(
+            self.image_path,
+            self.snippets,
+            self.output_path,
+            self.aspect_ratio,
+            progress_callback=lambda msg: self.progress.emit(msg)
+        )
+        self.finished.emit(success, message)
+
 
 class MainWindow(QMainWindow):
     def __init__(self, ratio_name):
         super().__init__()
         self.setWindowTitle("Video Content Generator")
         self.resize(1200, 800)
+        self.ratio_name = ratio_name  # Store for video generation
+        self.current_image_path = None  # Track current image
+        self.video_worker = None  # Video generation thread
         
         # Ensure uploads dir
         self.uploads_dir = os.path.join(os.getcwd(), 'uploads')
         os.makedirs(self.uploads_dir, exist_ok=True)
+        
+        # Output directory for videos
+        self.output_dir = os.path.join(os.getcwd(), 'output')
+        os.makedirs(self.output_dir, exist_ok=True)
         
         # Central Widget
         central_widget = QWidget()
@@ -177,8 +209,9 @@ class MainWindow(QMainWindow):
                 font-size: 16px; border-radius: 5px; font-weight: bold;
             }
             QPushButton:hover { background-color: #4a8bc6; }
+            QPushButton:disabled { background-color: #666; }
         """)
-        self.btn_generate.clicked.connect(lambda: self.log_panel.log("Generate clicked (Not implemented yet)"))
+        self.btn_generate.clicked.connect(self.generate_video)
         right_layout.addWidget(self.btn_generate)
         
         # Add to Main Layout with Ratios
@@ -205,11 +238,23 @@ class MainWindow(QMainWindow):
             
             shutil.copy2(file_path, target_path)
             
+            self.current_image_path = target_path  # Track for video generation
             self.canvas.set_image(target_path)
             self.log_panel.log(f"Image uploaded & saved to: {new_filename}")
             
+            # Clear snippets when new image is loaded
+            self.canvas.clear_snippets()
+            self._clear_snippet_buttons()
+            
         except Exception as e:
             self.log_panel.log(f"Error processing upload: {str(e)}")
+    
+    def _clear_snippet_buttons(self):
+        """Clear all snippet buttons from UI."""
+        for btn_row in self.snippet_buttons:
+            self.snippets_layout.removeWidget(btn_row)
+            btn_row.deleteLater()
+        self.snippet_buttons.clear()
 
     def toggle_snip_mode(self):
         """Toggle snip mode on the canvas."""
@@ -295,3 +340,67 @@ class MainWindow(QMainWindow):
             btn_delete = layout.itemAt(1).widget()
             btn_delete.clicked.disconnect()
             btn_delete.clicked.connect(lambda checked, idx=i: self.on_snippet_delete(idx))
+
+    def generate_video(self):
+        """Generate Ken Burns video from current image and snippets."""
+        # Validate inputs
+        if not self.current_image_path or not os.path.exists(self.current_image_path):
+            self.log_panel.log("Error: No image loaded. Please upload an image first.")
+            QMessageBox.warning(self, "No Image", "Please upload an image first.")
+            return
+        
+        if not self.canvas.snippets:
+            self.log_panel.log("Error: No snippets defined. Create at least one snippet.")
+            QMessageBox.warning(self, "No Snippets", "Please create at least one snippet using the Snip tool.")
+            return
+        
+        # Prepare output path
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_filename = f"kenburns_{timestamp}.mp4"
+        output_path = os.path.join(self.output_dir, output_filename)
+        
+        # Prepare snippets data
+        snippets_data = []
+        for snippet in self.canvas.snippets:
+            rect = snippet['source_rect']
+            snippets_data.append({
+                'x': rect.x(),
+                'y': rect.y(),
+                'width': rect.width(),
+                'height': rect.height()
+            })
+        
+        # Disable button during generation
+        self.btn_generate.setEnabled(False)
+        self.btn_generate.setText("Generating...")
+        
+        # Start worker thread
+        self.video_worker = VideoGeneratorWorker(
+            self.current_image_path,
+            snippets_data,
+            output_path,
+            self.ratio_name
+        )
+        self.video_worker.progress.connect(self.on_video_progress)
+        self.video_worker.finished.connect(self.on_video_finished)
+        self.video_worker.start()
+        
+        self.log_panel.log(f"Starting video generation with {len(snippets_data)} snippets...")
+    
+    def on_video_progress(self, message):
+        """Handle video generation progress."""
+        self.log_panel.log(message)
+    
+    def on_video_finished(self, success, message):
+        """Handle video generation completion."""
+        # Re-enable button
+        self.btn_generate.setEnabled(True)
+        self.btn_generate.setText("Generate Video")
+        
+        self.log_panel.log(message)
+        
+        if success:
+            QMessageBox.information(self, "Success", message)
+        else:
+            QMessageBox.warning(self, "Error", message)
+
