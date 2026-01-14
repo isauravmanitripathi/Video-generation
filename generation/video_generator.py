@@ -92,17 +92,26 @@ class KenBurnsGenerator:
         """
         Calculate optimal zoom level to fit snippet in viewport.
         
-        Smaller snippets → higher zoom (to see detail)
-        Larger snippets → lower zoom (to fit content)
+        The zoom factor in ffmpeg zoompan means:
+        - zoom=1.0: entire source image is visible
+        - zoom=2.0: half the source image dimensions are visible (2x magnification)
+        
+        To fit a snippet:
+        - visible_width = image_width / zoom
+        - visible_height = image_height / zoom
+        - For snippet to fit: snippet.width <= visible_width AND snippet.height <= visible_height
+        
+        So: zoom <= image_width/snippet.width AND zoom <= image_height/snippet.height
         """
-        # Calculate what zoom would fit the snippet nicely with some padding
-        padding_factor = 0.8  # Leave 20% padding around snippet
+        # Leave 20% padding around snippet for better framing
+        padding_factor = 0.8
         
-        # How much of the output frame should the snippet fill?
-        zoom_x = (self.output_width * padding_factor) / snippet.width
-        zoom_y = (self.output_height * padding_factor) / snippet.height
+        # Calculate max zoom that still shows entire snippet with padding
+        # snippet should fill padding_factor of the visible area
+        zoom_x = (self.image_width * padding_factor) / snippet.width
+        zoom_y = (self.image_height * padding_factor) / snippet.height
         
-        # Use the smaller zoom to ensure snippet fits
+        # Use the smaller zoom to ensure snippet fits fully
         zoom = min(zoom_x, zoom_y)
         
         # Clamp to reasonable range
