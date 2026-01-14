@@ -2,7 +2,8 @@ import os
 import shutil
 from datetime import datetime
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-                             QPushButton, QLabel, QTextEdit, QComboBox, QFileDialog)
+                             QPushButton, QLabel, QTextEdit, QComboBox, QFileDialog,
+                             QScrollArea, QFrame)
 from PyQt5.QtCore import Qt
 from gui.custom_widgets import LogPanel, ImageCanvas
 
@@ -43,7 +44,9 @@ class MainWindow(QMainWindow):
         
         center_layout.addWidget(self.canvas)
         
-        # Upload Button below canvas
+        # Upload and Snip Buttons
+        btn_row = QHBoxLayout()
+        
         btn_upload = QPushButton("Upload Image")
         btn_upload.setStyleSheet("""
             QPushButton {
@@ -52,7 +55,22 @@ class MainWindow(QMainWindow):
             QPushButton:hover { background-color: #555; }
         """)
         btn_upload.clicked.connect(self.open_upload_dialog)
-        center_layout.addWidget(btn_upload)
+        btn_row.addWidget(btn_upload)
+        
+        self.btn_snip = QPushButton("✂ Snip")
+        self.btn_snip.setCheckable(True)
+        self.btn_snip.setStyleSheet("""
+            QPushButton {
+                background-color: #444; color: white; padding: 8px; border-radius: 4px; border: 1px solid #555;
+            }
+            QPushButton:hover { background-color: #555; }
+            QPushButton:checked { background-color: #e74c3c; border: 2px solid #c0392b; }
+        """)
+        self.btn_snip.clicked.connect(self.toggle_snip_mode)
+        btn_row.addWidget(self.btn_snip)
+        
+        center_layout.addLayout(btn_row)
+
 
         # Zoom Controls
         zoom_layout = QHBoxLayout()
@@ -104,10 +122,43 @@ class MainWindow(QMainWindow):
         lbl_settings.setStyleSheet("font-size: 18px; font-weight: bold; margin-bottom: 10px;")
         right_layout.addWidget(lbl_settings)
         
+        # === Snippets Section ===
+        lbl_snippets = QLabel("Snippets")
+        lbl_snippets.setStyleSheet("font-size: 14px; font-weight: bold; margin-top: 10px;")
+        right_layout.addWidget(lbl_snippets)
+        
+        # Scrollable container for snippet buttons
+        snippets_scroll = QScrollArea()
+        snippets_scroll.setWidgetResizable(True)
+        snippets_scroll.setMaximumHeight(200)
+        snippets_scroll.setStyleSheet("""
+            QScrollArea { border: 1px solid #555; background-color: #2a2a2a; }
+        """)
+        
+        self.snippets_container = QWidget()
+        self.snippets_layout = QVBoxLayout(self.snippets_container)
+        self.snippets_layout.setContentsMargins(5, 5, 5, 5)
+        self.snippets_layout.setSpacing(5)
+        self.snippets_layout.addStretch()
+        
+        snippets_scroll.setWidget(self.snippets_container)
+        right_layout.addWidget(snippets_scroll)
+        
+        # Connect canvas signals
+        self.canvas.snippet_created.connect(self.on_snippet_created)
+        self.snippet_buttons = []  # Track buttons
+        
+        # Separator
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setStyleSheet("background-color: #555;")
+        right_layout.addWidget(separator)
+        
         # Script Input
         right_layout.addWidget(QLabel("Script:"))
         self.text_input = QTextEdit()
         self.text_input.setPlaceholderText("Enter video text...")
+        self.text_input.setMaximumHeight(100)
         right_layout.addWidget(self.text_input)
         
         # Voice Selection
@@ -160,3 +211,87 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.log_panel.log(f"Error processing upload: {str(e)}")
 
+    def toggle_snip_mode(self):
+        """Toggle snip mode on the canvas."""
+        enabled = self.btn_snip.isChecked()
+        self.canvas.set_snip_mode(enabled)
+    
+    def on_snippet_created(self, idx, coords):
+        """Called when a new snippet is created on the canvas."""
+        # Create button row with snippet button and delete button
+        btn_row = QWidget()
+        row_layout = QHBoxLayout(btn_row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(3)
+        
+        # Get color from canvas
+        color = self.canvas.snippets[idx]['color']
+        color_hex = color.name()
+        
+        btn_snippet = QPushButton(f"Snippet {idx + 1}")
+        btn_snippet.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {color_hex}; color: white; padding: 5px 10px;
+                border-radius: 3px; text-align: left; font-weight: bold;
+            }}
+            QPushButton:hover {{ opacity: 0.8; }}
+        """)
+        btn_snippet.clicked.connect(lambda checked, i=idx: self.on_snippet_click(i))
+        row_layout.addWidget(btn_snippet, stretch=1)
+        
+        btn_delete = QPushButton("×")
+        btn_delete.setFixedSize(25, 25)
+        btn_delete.setStyleSheet("""
+            QPushButton {
+                background-color: #666; color: white; border-radius: 3px;
+                font-weight: bold; font-size: 14px;
+            }
+            QPushButton:hover { background-color: #e74c3c; }
+        """)
+        btn_delete.clicked.connect(lambda checked, i=idx: self.on_snippet_delete(i))
+        row_layout.addWidget(btn_delete)
+        
+        # Insert before the stretch
+        self.snippets_layout.insertWidget(self.snippets_layout.count() - 1, btn_row)
+        self.snippet_buttons.append(btn_row)
+    
+    def on_snippet_click(self, idx):
+        """Select a snippet on the canvas."""
+        self.canvas.select_snippet(idx)
+    
+    def on_snippet_delete(self, idx):
+        """Delete a snippet."""
+        if 0 <= idx < len(self.snippet_buttons):
+            # Remove button widget
+            btn_row = self.snippet_buttons.pop(idx)
+            self.snippets_layout.removeWidget(btn_row)
+            btn_row.deleteLater()
+            
+            # Delete from canvas
+            self.canvas.delete_snippet(idx)
+            
+            # Update remaining button indices
+            self._refresh_snippet_buttons()
+    
+    def _refresh_snippet_buttons(self):
+        """Refresh snippet button indices after deletion."""
+        for i, btn_row in enumerate(self.snippet_buttons):
+            layout = btn_row.layout()
+            btn_snippet = layout.itemAt(0).widget()
+            color = self.canvas.snippets[i]['color']
+            color_hex = color.name()
+            btn_snippet.setText(f"Snippet {i + 1}")
+            btn_snippet.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {color_hex}; color: white; padding: 5px 10px;
+                    border-radius: 3px; text-align: left; font-weight: bold;
+                }}
+                QPushButton:hover {{ opacity: 0.8; }}
+            """)
+            # Reconnect with correct index
+            btn_snippet.clicked.disconnect()
+            btn_snippet.clicked.connect(lambda checked, idx=i: self.on_snippet_click(idx))
+            
+            btn_delete = layout.itemAt(1).widget()
+            btn_delete.clicked.disconnect()
+            btn_delete.clicked.connect(lambda checked, idx=i: self.on_snippet_delete(idx))

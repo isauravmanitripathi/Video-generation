@@ -37,7 +37,9 @@ class LogPanel(QWidget):
 
 class ImageCanvas(QWidget):
     log_signal = pyqtSignal(str)
-    file_dropped_signal = pyqtSignal(str) # New Signal
+    file_dropped_signal = pyqtSignal(str)
+    snippet_created = pyqtSignal(int, dict)  # (index, {x, y, w, h} in source coords)
+    snippet_deleted = pyqtSignal(int)  # index
     
     def __init__(self, ratio_name):
         super().__init__()
@@ -63,6 +65,18 @@ class ImageCanvas(QWidget):
         self.max_zoom = 5.0
         self.zoom_center = QPointF(0, 0)  # For pinch zoom centering
         
+        # Snippet state
+        self.snip_mode = False
+        self.snippets = []  # List of dicts: {source_rect: QRect, color: QColor}
+        self.current_snippet_rect = None  # QRect being drawn (screen coords)
+        self.snippet_start_pos = None  # Starting point for drawing
+        self.selected_snippet_idx = -1  # -1 = none selected
+        self.snippet_colors = [
+            QColor("#FF6B6B"), QColor("#4ECDC4"), QColor("#45B7D1"),
+            QColor("#96CEB4"), QColor("#FFEAA7"), QColor("#DDA0DD"),
+            QColor("#98D8C8"), QColor("#F7DC6F"), QColor("#BB8FCE")
+        ]
+        
         # Determine aspect ratio float
         if "9:16" in ratio_name:
             self.aspect_ratio = 9/16
@@ -72,6 +86,7 @@ class ImageCanvas(QWidget):
             self.aspect_ratio = 1.0
             
         self.viewport_rect = QRect()
+
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -291,6 +306,30 @@ class ImageCanvas(QWidget):
                                 dw, dh)
             painter.drawPixmap(target_rect, self.source_pixmap)
             
+            # Draw snippets
+            for i, snippet in enumerate(self.snippets):
+                screen_rect = self._source_to_screen_rect(snippet['source_rect'])
+                if screen_rect:
+                    color = snippet['color']
+                    # Only show if selected or currently drawing
+                    if i == self.selected_snippet_idx:
+                        # Selected: solid border, semi-transparent fill
+                        painter.setBrush(QColor(color.red(), color.green(), color.blue(), 50))
+                        pen = QPen(color, 3)
+                        painter.setPen(pen)
+                        painter.drawRect(screen_rect)
+                    else:
+                        # Not selected: invisible (or very faint)
+                        pass
+            
+            # Draw current snippet being created
+            if self.current_snippet_rect and self.snip_mode:
+                color = self.snippet_colors[len(self.snippets) % len(self.snippet_colors)]
+                painter.setBrush(QColor(color.red(), color.green(), color.blue(), 80))
+                pen = QPen(color, 2, Qt.DashLine)
+                painter.setPen(pen)
+                painter.drawRect(self.current_snippet_rect)
+            
             painter.restore()
         
         # 5. Draw Viewport Border
@@ -299,64 +338,186 @@ class ImageCanvas(QWidget):
         painter.drawRect(self.viewport_rect)
         
     def mousePressEvent(self, event):
-        if self.source_pixmap and self.viewport_rect.contains(event.pos()):
+        if not self.source_pixmap or not self.viewport_rect.contains(event.pos()):
+            return
+            
+        if self.snip_mode:
+            # Start drawing snippet
+            self.snippet_start_pos = event.pos()
+            self.current_snippet_rect = QRect(event.pos(), event.pos())
+            self.setCursor(Qt.CrossCursor)
+        else:
+            # Pan mode
             self.is_dragging = True
             self.last_mouse_pos = event.pos()
             self.setCursor(Qt.ClosedHandCursor)
             
     def mouseMoveEvent(self, event):
-        if self.is_dragging and self.source_pixmap:
+        if self.snip_mode and self.snippet_start_pos:
+            # Update snippet rectangle
+            self.current_snippet_rect = QRect(
+                self.snippet_start_pos,
+                event.pos()
+            ).normalized()
+            self.update()
+        elif self.is_dragging and self.source_pixmap:
             delta = event.pos() - self.last_mouse_pos
             self.image_pos += delta
             self.last_mouse_pos = event.pos()
             
-            # Log Coordinates relative to the source image?
-            # User wants to know "what coordinate from that image is shown"
-            # The viewport top-left in Image Space.
-            
-            # Coordinate Math:
-            # Viewport Center (Screen) corresponds to Image Center + offset (Screen Px)
-            # We need to map Viewport Top-Left back to Image Coordinates.
-            
-            # Image Top-Left (Screen) = Viewport Center - (ImgWidth/2) + Offset
-            # Viewport Top-Left (Screen relative to Image Top-Left) = - (Image Top-Left relative to Viewport)
-            
-            # Simplified: 
-            # Scale Factor = self.scale_factor
-            # Offset X (Screen) = self.image_pos.x()
-            
-            # Image Center X (Screen) = Viewport Center + Offset X
-            # Viewport Center = Image Center X - Offset X
-            
+            # Log crop coordinates
             src_w = self.source_pixmap.width()
             src_h = self.source_pixmap.height()
-            
             dw = src_w * self.scale_factor
             dh = src_h * self.scale_factor
-            
-            # Viewport Top-Left in "Screen relative to Image Top-Left"
-            # img_tl_x = (vp_w/2) - (dw/2) + offset_x
-            # vp_tl_x relative to img_tl: -img_tl_x
-            # = - ( (vp_w/2) - (dw/2) + offset_x )
-            # = (dw/2) - (vp_w/2) - offset_x
-            
             vp_w = self.viewport_rect.width()
             vp_h = self.viewport_rect.height()
             
             screen_crop_x = (dw - vp_w)/2 - self.image_pos.x()
             screen_crop_y = (dh - vp_h)/2 - self.image_pos.y()
             
-            # Convert to Source Coordinates
             source_crop_x = int(screen_crop_x / self.scale_factor)
             source_crop_y = int(screen_crop_y / self.scale_factor)
             source_crop_w = int(vp_w / self.scale_factor)
             source_crop_h = int(vp_h / self.scale_factor)
             
             self.log_signal.emit(f"Crop Rect: x={source_crop_x}, y={source_crop_y}, w={source_crop_w}, h={source_crop_h}")
-            
             self.update()
             
     def mouseReleaseEvent(self, event):
-        if self.is_dragging:
+        if self.snip_mode and self.snippet_start_pos and self.current_snippet_rect:
+            # Save the snippet
+            if self.current_snippet_rect.width() > 10 and self.current_snippet_rect.height() > 10:
+                source_rect = self._screen_to_source_rect(self.current_snippet_rect)
+                if source_rect:
+                    color = self.snippet_colors[len(self.snippets) % len(self.snippet_colors)]
+                    snippet = {
+                        'source_rect': source_rect,
+                        'color': color
+                    }
+                    self.snippets.append(snippet)
+                    idx = len(self.snippets) - 1
+                    
+                    self.log_signal.emit(
+                        f"Snippet {idx + 1} created: x={source_rect.x()}, y={source_rect.y()}, "
+                        f"w={source_rect.width()}, h={source_rect.height()}"
+                    )
+                    
+                    # Emit signal with source coordinates
+                    self.snippet_created.emit(idx, {
+                        'x': source_rect.x(),
+                        'y': source_rect.y(),
+                        'w': source_rect.width(),
+                        'h': source_rect.height()
+                    })
+                    
+                    # Select the new snippet
+                    self.selected_snippet_idx = idx
+            
+            self.current_snippet_rect = None
+            self.snippet_start_pos = None
+            self.update()
+        elif self.is_dragging:
             self.is_dragging = False
-            self.setCursor(Qt.ArrowCursor)
+            
+        self.setCursor(Qt.CrossCursor if self.snip_mode else Qt.ArrowCursor)
+
+    # ========== Snippet Methods ==========
+    
+    def set_snip_mode(self, enabled):
+        """Toggle snip mode for drawing snippets."""
+        self.snip_mode = enabled
+        self.setCursor(Qt.CrossCursor if enabled else Qt.ArrowCursor)
+        if enabled:
+            self.log_signal.emit("Snip mode ON - Draw a rectangle to create a snippet")
+        else:
+            self.log_signal.emit("Snip mode OFF")
+        self.update()
+    
+    def select_snippet(self, idx):
+        """Select a snippet to highlight it."""
+        if 0 <= idx < len(self.snippets):
+            self.selected_snippet_idx = idx
+            snippet = self.snippets[idx]
+            self.log_signal.emit(
+                f"Selected Snippet {idx + 1}: x={snippet['source_rect'].x()}, "
+                f"y={snippet['source_rect'].y()}, w={snippet['source_rect'].width()}, "
+                f"h={snippet['source_rect'].height()}"
+            )
+        else:
+            self.selected_snippet_idx = -1
+        self.update()
+    
+    def delete_snippet(self, idx):
+        """Delete a snippet by index."""
+        if 0 <= idx < len(self.snippets):
+            self.snippets.pop(idx)
+            self.log_signal.emit(f"Deleted Snippet {idx + 1}")
+            self.snippet_deleted.emit(idx)
+            if self.selected_snippet_idx == idx:
+                self.selected_snippet_idx = -1
+            elif self.selected_snippet_idx > idx:
+                self.selected_snippet_idx -= 1
+            self.update()
+    
+    def clear_snippets(self):
+        """Clear all snippets."""
+        self.snippets.clear()
+        self.selected_snippet_idx = -1
+        self.log_signal.emit("Cleared all snippets")
+        self.update()
+    
+    def _screen_to_source_rect(self, screen_rect):
+        """Convert screen rectangle to source image coordinates."""
+        if not self.source_pixmap or not self.viewport_rect.isValid():
+            return None
+        
+        src_w = self.source_pixmap.width()
+        src_h = self.source_pixmap.height()
+        dw = src_w * self.scale_factor
+        dh = src_h * self.scale_factor
+        
+        vp_cx = self.viewport_rect.width() / 2
+        vp_cy = self.viewport_rect.height() / 2
+        
+        # Image top-left in viewport coords
+        img_x = vp_cx - (dw / 2) + self.image_pos.x() + self.viewport_rect.x()
+        img_y = vp_cy - (dh / 2) + self.image_pos.y() + self.viewport_rect.y()
+        
+        # Convert screen rect to source coords
+        source_x = int((screen_rect.x() - img_x) / self.scale_factor)
+        source_y = int((screen_rect.y() - img_y) / self.scale_factor)
+        source_w = int(screen_rect.width() / self.scale_factor)
+        source_h = int(screen_rect.height() / self.scale_factor)
+        
+        # Clamp to source image bounds
+        source_x = max(0, min(source_x, src_w))
+        source_y = max(0, min(source_y, src_h))
+        
+        return QRect(source_x, source_y, source_w, source_h)
+    
+    def _source_to_screen_rect(self, source_rect):
+        """Convert source image rectangle to screen coordinates."""
+        if not self.source_pixmap or not self.viewport_rect.isValid():
+            return None
+        
+        src_w = self.source_pixmap.width()
+        src_h = self.source_pixmap.height()
+        dw = src_w * self.scale_factor
+        dh = src_h * self.scale_factor
+        
+        vp_cx = self.viewport_rect.width() / 2
+        vp_cy = self.viewport_rect.height() / 2
+        
+        # Image top-left in screen coords
+        img_x = vp_cx - (dw / 2) + self.image_pos.x() + self.viewport_rect.x()
+        img_y = vp_cy - (dh / 2) + self.image_pos.y() + self.viewport_rect.y()
+        
+        # Convert source rect to screen coords
+        screen_x = int(img_x + source_rect.x() * self.scale_factor)
+        screen_y = int(img_y + source_rect.y() * self.scale_factor)
+        screen_w = int(source_rect.width() * self.scale_factor)
+        screen_h = int(source_rect.height() * self.scale_factor)
+        
+        return QRect(screen_x, screen_y, screen_w, screen_h)
+
