@@ -13,12 +13,13 @@ class VideoGeneratorWorker(QThread):
     finished = pyqtSignal(bool, str)
     progress = pyqtSignal(str)
     
-    def __init__(self, image_path, snippets, output_path, aspect_ratio):
+    def __init__(self, image_path, snippets, output_path, aspect_ratio, show_boxes=False):
         super().__init__()
         self.image_path = image_path
         self.snippets = snippets
         self.output_path = output_path
         self.aspect_ratio = aspect_ratio
+        self.show_boxes = show_boxes
     
     def run(self):
         self.progress.emit("Generating video with Ken Burns effect...")
@@ -27,6 +28,7 @@ class VideoGeneratorWorker(QThread):
             self.snippets,
             self.output_path,
             self.aspect_ratio,
+            self.show_boxes,
             progress_callback=lambda msg: self.progress.emit(msg)
         )
         self.finished.emit(success, message)
@@ -370,6 +372,20 @@ class MainWindow(QMainWindow):
                 'height': rect.height()
             })
         
+        # Ask about box overlay
+        show_boxes = QMessageBox.question(
+            self,
+            "Box Overlay",
+            "Do you want to show a border box around each snippet region in the video?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        ) == QMessageBox.Yes
+        
+        if show_boxes:
+            self.log_panel.log("Box overlay: Enabled - borders will be drawn around snippets")
+        else:
+            self.log_panel.log("Box overlay: Disabled")
+        
         # Disable button during generation
         self.btn_generate.setEnabled(False)
         self.btn_generate.setText("Generating...")
@@ -379,7 +395,8 @@ class MainWindow(QMainWindow):
             self.current_image_path,
             snippets_data,
             output_path,
-            self.ratio_name
+            self.ratio_name,
+            show_boxes
         )
         self.video_worker.progress.connect(self.on_video_progress)
         self.video_worker.finished.connect(self.on_video_finished)

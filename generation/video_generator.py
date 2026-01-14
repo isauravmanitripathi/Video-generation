@@ -50,7 +50,10 @@ class KenBurnsGenerator:
         hold_duration: float = 1.0,
         outro_duration: float = 2.0,
         min_zoom: float = 1.0,
-        max_zoom: float = 4.0
+        max_zoom: float = 4.0,
+        show_boxes: bool = False,
+        box_color: str = "red",
+        box_thickness: int = 4
     ):
         self.image_path = image_path
         self.snippets = [Snippet(**s) if isinstance(s, dict) else s for s in snippets]
@@ -63,6 +66,9 @@ class KenBurnsGenerator:
         self.outro_duration = outro_duration
         self.min_zoom = min_zoom
         self.max_zoom = max_zoom
+        self.show_boxes = show_boxes
+        self.box_color = box_color
+        self.box_thickness = box_thickness
         
         # Get image dimensions
         self.image_width, self.image_height = self._get_image_dimensions()
@@ -185,8 +191,18 @@ class KenBurnsGenerator:
         
         return keyframes
     
+    def _ease_in_out_expression(self, progress_var: str) -> str:
+        """
+        Build a smoothstep (ease-in-out) expression.
+        Formula: 3*t^2 - 2*t^3 where t is progress (0 to 1)
+        This gives smooth acceleration at start and deceleration at end.
+        """
+        t = progress_var
+        # smoothstep: t * t * (3 - 2 * t)
+        return f"({t})*({t})*(3-2*({t}))"
+    
     def _build_zoom_expression(self) -> str:
-        """Build ffmpeg expression for zoom based on keyframes."""
+        """Build ffmpeg expression for zoom based on keyframes with smooth easing."""
         if len(self.keyframes) < 2:
             return "1"
         
@@ -199,10 +215,14 @@ class KenBurnsGenerator:
             if frame_diff == 0:
                 continue
             
-            # Linear interpolation between keyframes
-            # lerp formula: start + (end - start) * progress
+            # Progress from 0 to 1
             progress = f"(on-{kf1.frame})/{frame_diff}"
-            lerp = f"{kf1.zoom}+({kf2.zoom}-{kf1.zoom})*{progress}"
+            
+            # Apply smoothstep easing for smooth motion
+            eased_progress = self._ease_in_out_expression(progress)
+            
+            # Interpolation with easing: start + (end - start) * eased_progress
+            lerp = f"{kf1.zoom}+({kf2.zoom}-{kf1.zoom})*{eased_progress}"
             
             if i == 0:
                 condition = f"lt(on,{kf2.frame})"
@@ -221,7 +241,7 @@ class KenBurnsGenerator:
         return expr
     
     def _build_x_expression(self) -> str:
-        """Build ffmpeg expression for x pan based on keyframes."""
+        """Build ffmpeg expression for x pan based on keyframes with smooth easing."""
         if len(self.keyframes) < 2:
             return f"(iw-iw/zoom)/2"
         
@@ -235,13 +255,10 @@ class KenBurnsGenerator:
                 continue
             
             progress = f"(on-{kf1.frame})/{frame_diff}"
+            eased_progress = self._ease_in_out_expression(progress)
             
-            # Calculate x position: center_x - (viewport_width/2)
-            # In zoompan, x is top-left corner of visible area
-            # visible_width = iw/zoom, so x = center_x - (iw/zoom)/2
-            x1 = f"({kf1.center_x}-(iw/zoom)/2)"
-            x2 = f"({kf2.center_x}-(iw/zoom)/2)"
-            lerp = f"{kf1.center_x}+({kf2.center_x}-{kf1.center_x})*{progress}-(iw/zoom)/2"
+            # Interpolate center position with easing, then offset for viewport
+            lerp = f"{kf1.center_x}+({kf2.center_x}-{kf1.center_x})*{eased_progress}-(iw/zoom)/2"
             
             if i == 0:
                 condition = f"lt(on,{kf2.frame})"
@@ -263,7 +280,7 @@ class KenBurnsGenerator:
         return expr
     
     def _build_y_expression(self) -> str:
-        """Build ffmpeg expression for y pan based on keyframes."""
+        """Build ffmpeg expression for y pan based on keyframes with smooth easing."""
         if len(self.keyframes) < 2:
             return f"(ih-ih/zoom)/2"
         
@@ -277,7 +294,9 @@ class KenBurnsGenerator:
                 continue
             
             progress = f"(on-{kf1.frame})/{frame_diff}"
-            lerp = f"{kf1.center_y}+({kf2.center_y}-{kf1.center_y})*{progress}-(ih/zoom)/2"
+            eased_progress = self._ease_in_out_expression(progress)
+            
+            lerp = f"{kf1.center_y}+({kf2.center_y}-{kf1.center_y})*{eased_progress}-(ih/zoom)/2"
             
             if i == 0:
                 condition = f"lt(on,{kf2.frame})"
@@ -312,6 +331,34 @@ class KenBurnsGenerator:
         total_frames = self.keyframes[-1].frame if self.keyframes else 1
         duration = total_frames / self.fps
         
+        # Build filter chain
+        filters = []
+        
+        # Add drawbox filters for snippet regions if enabled
+        # Each box appears only when the camera reaches that snippet
+        if self.show_boxes:
+            # Calculate timing for each snippet
+            # Timeline: intro(2s) -> [animate(3s) + hold(1s)] per snippet -> outro(2s)
+            current_time = self.intro_duration  # Skip intro
+            
+            for i, snippet in enumerate(self.snippets):
+                # Box appears when animation TO this snippet completes (after snippet_duration)
+                # and stays visible during the hold period
+                box_start_time = current_time + self.snippet_duration
+                box_end_time = box_start_time + self.hold_duration
+                
+                # drawbox with enable expression: only show during this snippet's hold period
+                drawbox = (
+                    f"drawbox=x={snippet.x}:y={snippet.y}:"
+                    f"w={snippet.width}:h={snippet.height}:"
+                    f"color={self.box_color}@0.9:t={self.box_thickness}:"
+                    f"enable='between(t,{box_start_time:.2f},{box_end_time:.2f})'"
+                )
+                filters.append(drawbox)
+                
+                # Move to next snippet's timing
+                current_time += self.snippet_duration + self.hold_duration
+        
         # Build zoompan filter
         zoompan_filter = (
             f"zoompan="
@@ -322,13 +369,17 @@ class KenBurnsGenerator:
             f"s={self.output_width}x{self.output_height}:"
             f"fps={self.fps}"
         )
+        filters.append(zoompan_filter)
+        
+        # Combine filters with comma
+        full_filter = ",".join(filters)
         
         cmd = [
             'ffmpeg',
             '-y',  # Overwrite output
             '-loop', '1',
             '-i', self.image_path,
-            '-vf', zoompan_filter,
+            '-vf', full_filter,
             '-t', str(duration),
             '-pix_fmt', 'yuv420p',
             '-c:v', 'libx264',
@@ -385,6 +436,7 @@ def generate_video_from_snippets(
     snippets: List[dict],
     output_path: str,
     aspect_ratio: str = "9:16",
+    show_boxes: bool = False,
     progress_callback=None
 ) -> Tuple[bool, str]:
     """
@@ -435,7 +487,8 @@ def generate_video_from_snippets(
         image_path=image_path,
         snippets=normalized_snippets,
         output_width=width,
-        output_height=height
+        output_height=height,
+        show_boxes=show_boxes
     )
     
     return generator.generate(output_path, progress_callback)
