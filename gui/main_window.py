@@ -3,7 +3,8 @@ import shutil
 from datetime import datetime
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QPushButton, QLabel, QTextEdit, QComboBox, QFileDialog,
-                             QScrollArea, QFrame, QMessageBox)
+                             QScrollArea, QFrame, QMessageBox, QMenuBar, QMenu, QAction,
+                             QActionGroup, QToolBar)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from gui.custom_widgets import LogPanel, ImageCanvas, SnippetItemWidget
 from generation.video_generator import generate_video_from_snippets
@@ -91,6 +92,9 @@ class MainWindow(QMainWindow):
         # Output directory for videos
         self.output_dir = os.path.join(os.getcwd(), 'output')
         os.makedirs(self.output_dir, exist_ok=True)
+        
+        # Setup Menu Bar
+        self._setup_menu_bar()
         
         # Central Widget
         central_widget = QWidget()
@@ -230,12 +234,7 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(separator)
         
         # Custom Script Input Removed - scripts are now per-snippet
-        
-        # Voice Selection
-        right_layout.addWidget(QLabel("Voice:"))
-        self.voice_combo = QComboBox()
-        self.voice_combo.addItems(self.tts_handler.get_voices())
-        right_layout.addWidget(self.voice_combo)
+        # Voice selection moved to top menu bar
         
         right_layout.addStretch()
         
@@ -258,6 +257,73 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(center_container, 60) # Bigger focus on canvas
         main_layout.addWidget(right_container, 20)
         
+    def _setup_menu_bar(self):
+        """Setup the top menu bar with voice selection."""
+        menubar = self.menuBar()
+        menubar.setStyleSheet("""
+            QMenuBar {
+                background-color: #2b2b2b;
+                color: white;
+                padding: 5px;
+                font-size: 13px;
+            }
+            QMenuBar::item {
+                background-color: transparent;
+                padding: 8px 15px;
+                border-radius: 4px;
+            }
+            QMenuBar::item:selected {
+                background-color: #444;
+            }
+            QMenu {
+                background-color: #333;
+                color: white;
+                border: 1px solid #555;
+            }
+            QMenu::item {
+                padding: 8px 25px 8px 15px;
+            }
+            QMenu::item:selected {
+                background-color: #5a9bd6;
+            }
+            QMenu::indicator {
+                width: 18px;
+                height: 18px;
+                margin-left: 5px;
+            }
+            QMenu::indicator:checked {
+                image: none;
+                background-color: #5a9bd6;
+                border-radius: 3px;
+            }
+        """)
+        
+        # Voice Menu
+        voice_menu = menubar.addMenu("🎙 Voice")
+        
+        # Create action group for exclusive selection
+        self.voice_action_group = QActionGroup(self)
+        self.voice_action_group.setExclusive(True)
+        
+        # Add voice options
+        voices = self.tts_handler.get_voices()
+        self.selected_voice = voices[0] if voices else "en-US-AriaNeural"
+        
+        for voice in voices:
+            action = QAction(voice, self)
+            action.setCheckable(True)
+            action.setData(voice)
+            if voice == self.selected_voice:
+                action.setChecked(True)
+            action.triggered.connect(lambda checked, v=voice: self._on_voice_selected(v))
+            self.voice_action_group.addAction(action)
+            voice_menu.addAction(action)
+    
+    def _on_voice_selected(self, voice):
+        """Handle voice selection from menu."""
+        self.selected_voice = voice
+        self.log_panel.log(f"Voice changed to: {voice}")
+    
     def open_upload_dialog(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Select Image", "", "Images (*.png *.jpg *.jpeg *.bmp)")
         if file_path:
@@ -423,7 +489,7 @@ class MainWindow(QMainWindow):
         self.btn_generate.setText("Generating...")
         
         # Get selected voice
-        voice = self.voice_combo.currentText()
+        voice = self.selected_voice
         
         # Start worker thread
         self.video_worker = VideoGeneratorWorker(
