@@ -28,6 +28,9 @@ class Snippet:
     y: int
     width: int
     height: int
+    text: str = ""
+    audio_path: Optional[str] = None
+    audio_duration: float = 0.0
 
 
 class KenBurnsGenerator:
@@ -56,7 +59,17 @@ class KenBurnsGenerator:
         box_thickness: int = 4
     ):
         self.image_path = image_path
-        self.snippets = [Snippet(**s) if isinstance(s, dict) else s for s in snippets]
+        # Normalize snippets to Snippet objects
+        self.snippets = []
+        for s in snippets:
+            if isinstance(s, dict):
+                # Handle potential extra keys in dict that aren't in dataclass
+                # filter keys
+                valid_keys = {k: v for k, v in s.items() if k in Snippet.__annotations__}
+                self.snippets.append(Snippet(**valid_keys))
+            else:
+                self.snippets.append(s)
+                
         self.output_width = output_width
         self.output_height = output_height
         self.fps = fps
@@ -129,7 +142,7 @@ class KenBurnsGenerator:
         
         Timeline:
         - Intro: Full image overview
-        - Per snippet: Animate to snippet, hold
+        - Per snippet: Animate to snippet, hold (dynamic duration based on audio)
         - Outro: Return to overview
         """
         keyframes = []
@@ -172,7 +185,11 @@ class KenBurnsGenerator:
             ))
             
             # Hold at snippet
-            current_frame += int(self.hold_duration * self.fps)
+            # Use snippet's audio duration if available, else usage default hold duration
+            # Ensure at least minimal hold time (e.g. 1s) even if audio is short
+            duration = max(snippet.audio_duration, self.hold_duration)
+            
+            current_frame += int(duration * self.fps)
             keyframes.append(Keyframe(
                 frame=current_frame,
                 zoom=snippet_zoom,
@@ -329,36 +346,62 @@ class KenBurnsGenerator:
         y_expr = self._build_y_expression()
         
         total_frames = self.keyframes[-1].frame if self.keyframes else 1
-        duration = total_frames / self.fps
+        video_duration = total_frames / self.fps
         
         # Build filter chain
         filters = []
         
-        # Add drawbox filters for snippet regions if enabled
-        # Each box appears only when the camera reaches that snippet
-        if self.show_boxes:
-            # Calculate timing for each snippet
-            # Timeline: intro(2s) -> [animate(3s) + hold(1s)] per snippet -> outro(2s)
-            current_time = self.intro_duration  # Skip intro
+        # --- Timeline Calculation for Boxes & Audio ---
+        # We need to reconstruct the timeline to know exactly when:
+        # 1. Boxes should appear/disappear
+        # 2. Audio clips should start playing
+        
+        current_time = self.intro_duration
+        
+        # Audio inputs start from index 1 (0 is image)
+        audio_inputs = []
+        audio_filters = []
+        mixed_audio_labels = []
+        audio_input_count = 0  # Track actual number of audio inputs
+        
+        for i, snippet in enumerate(self.snippets):
+            # Move to snippet
+            move_start = current_time
+            move_end = current_time + self.snippet_duration
             
-            for i, snippet in enumerate(self.snippets):
-                # Box appears when animation TO this snippet completes (after snippet_duration)
-                # and stays visible during the hold period
-                box_start_time = current_time + self.snippet_duration
-                box_end_time = box_start_time + self.hold_duration
-                
-                # drawbox with enable expression: only show during this snippet's hold period
+            # Hold at snippet (Audio plays here)
+            # Use max of audio duration or default hold
+            hold_dur = max(snippet.audio_duration, self.hold_duration)
+            hold_start = move_end
+            hold_end = hold_start + hold_dur
+            
+            # 1. Drawbox Filter
+            if self.show_boxes:
+                # Box visible during hold
                 drawbox = (
                     f"drawbox=x={snippet.x}:y={snippet.y}:"
                     f"w={snippet.width}:h={snippet.height}:"
                     f"color={self.box_color}@0.9:t={self.box_thickness}:"
-                    f"enable='between(t,{box_start_time:.2f},{box_end_time:.2f})'"
+                    f"enable='between(t,{hold_start:.2f},{hold_end:.2f})'"
                 )
                 filters.append(drawbox)
+            
+            # 2. Audio Processing
+            if snippet.audio_path and os.path.exists(snippet.audio_path):
+                audio_input_count += 1
+                input_idx = audio_input_count  # FFmpeg input index (0 is video, so 1, 2, 3... for audio)
+                audio_inputs.extend(['-i', snippet.audio_path])
                 
-                # Move to next snippet's timing
-                current_time += self.snippet_duration + self.hold_duration
-        
+                # Delay audio to start at hold_start
+                delay_ms = int(hold_start * 1000)
+                label = f"a{i}"
+                # adelay adds silence at start. all=1 applies to all channels
+                audio_filters.append(f"[{input_idx}:a]adelay={delay_ms}|{delay_ms}[{label}]")
+                mixed_audio_labels.append(f"[{label}]")
+            
+            # Update time for next snippet
+            current_time = hold_end
+            
         # Build zoompan filter
         zoompan_filter = (
             f"zoompan="
@@ -371,22 +414,58 @@ class KenBurnsGenerator:
         )
         filters.append(zoompan_filter)
         
-        # Combine filters with comma
-        full_filter = ",".join(filters)
+        # Combine video filters
+        full_vf = ",".join(filters)
         
-        cmd = [
-            'ffmpeg',
-            '-y',  # Overwrite output
-            '-loop', '1',
-            '-i', self.image_path,
-            '-vf', full_filter,
-            '-t', str(duration),
+        # Command construction
+        cmd = ['ffmpeg', '-y']
+        
+        # Video Input
+        cmd.extend(['-loop', '1', '-i', self.image_path])
+        
+        # Audio Inputs
+        cmd.extend(audio_inputs)
+        
+        # Complex Filter Network
+        filter_complex = []
+        
+        # Video Graph
+        # [0:v]filters...[v]
+        # Actually zoompan works on input 0.
+        # But we need to be careful if we map it. 
+        # Simpler: just use -vf if no other video inputs.
+        # But we are using -filter_complex for audio. So we should use it for video too to be safe.
+        filter_complex.append(f"[0:v]{full_vf}[outv]")
+        
+        # Audio Graph
+        if mixed_audio_labels:
+            # Mix all delayed audio streams
+            # amix inputs=N:duration=longest
+            amix_cmd = f"{''.join(mixed_audio_labels)}amix=inputs={len(mixed_audio_labels)}:duration=longest[outa]"
+            filter_complex.extend(audio_filters)
+            filter_complex.append(amix_cmd)
+            has_audio = True
+        else:
+            has_audio = False
+            
+        cmd.extend(['-filter_complex', ";".join(filter_complex)])
+        
+        # Map outputs
+        cmd.extend(['-map', '[outv]'])
+        if has_audio:
+            cmd.extend(['-map', '[outa]'])
+            
+        # Duration and Encoding settings
+        cmd.extend([
+            '-t', str(video_duration),
             '-pix_fmt', 'yuv420p',
             '-c:v', 'libx264',
             '-preset', 'medium',
             '-crf', '23',
+            '-c:a', 'aac', # Encode audio
+            '-b:a', '192k',
             output_path
-        ]
+        ])
         
         return cmd
     

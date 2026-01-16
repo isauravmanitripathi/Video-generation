@@ -1,6 +1,6 @@
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QTextEdit, 
                              QFileDialog, QFrame, QSizePolicy, QGesture,
-                             QPinchGesture)
+                             QPinchGesture, QPushButton, QHBoxLayout)
 from PyQt5.QtCore import Qt, pyqtSignal, QPoint, QRect, QSize, QEvent, QPointF
 from PyQt5.QtGui import QPainter, QPixmap, QColor, QPen, QImage
 from datetime import datetime
@@ -520,4 +520,105 @@ class ImageCanvas(QWidget):
         screen_h = int(source_rect.height() * self.scale_factor)
         
         return QRect(screen_x, screen_y, screen_w, screen_h)
+
+
+class SnippetItemWidget(QWidget):
+    """
+    A widget representing a snippet in the list.
+    Contains a header button, a delete button, and an expandable script text box.
+    """
+    text_changed = pyqtSignal(int, str)  # idx, text
+    clicked = pyqtSignal(int)            # idx
+    deleted = pyqtSignal(int)            # idx
+    
+    def __init__(self, idx, color_hex, text=""):
+        super().__init__()
+        self.idx = idx
+        self.expanded = False
+        
+        # Main layout
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 5, 0, 5)
+        layout.setSpacing(2)
+        
+        # --- Header Row ---
+        header_widget = QWidget()
+        header_layout = QHBoxLayout(header_widget)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Snippet Button (Color + Label)
+        self.btn_header = QPushButton(f"Snippet {idx + 1}")
+        self.btn_header.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {color_hex}; 
+                color: white; 
+                padding: 8px;
+                border: 1px solid #444;
+                border-radius: 4px;
+                text-align: left;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{ opacity: 0.9; border: 1px solid #fff; }}
+        """)
+        self.btn_header.clicked.connect(self._on_header_click)
+        header_layout.addWidget(self.btn_header, 8)
+        
+        # Delete Button
+        self.btn_delete = QPushButton("×")
+        self.btn_delete.setFixedSize(30, 30)
+        self.btn_delete.setStyleSheet("""
+            QPushButton {
+                background-color: #d32f2f; color: white; 
+                border-radius: 4px; font-weight: bold; font-size: 16px;
+            }
+            QPushButton:hover { background-color: #b71c1c; }
+        """)
+        self.btn_delete.clicked.connect(lambda: self.deleted.emit(self.idx))
+        header_layout.addWidget(self.btn_delete, 1)
+        
+        layout.addWidget(header_widget)
+        
+        # --- Script Text Area ---
+        self.txt_script = QTextEdit()
+        self.txt_script.setPlaceholderText("Type script here (e.g. 'This is the main title...')")
+        self.txt_script.setFixedHeight(0)
+        self.txt_script.setMaximumHeight(0) # Start hidden
+        self.txt_script.setVisible(False)
+        self.txt_script.setStyleSheet("""
+            QTextEdit {
+                background-color: #2b2b2b;
+                color: #ddd;
+                border: 1px solid #444;
+                border-radius: 4px;
+                padding: 4px;
+            }
+        """)
+        self.txt_script.setText(text)
+        self.txt_script.textChanged.connect(self._on_text_changed)
+        layout.addWidget(self.txt_script)
+        
+    def _on_header_click(self):
+        """Toggle text box and emit clicked signal."""
+        self.clicked.emit(self.idx)
+        self.toggle_expand()
+        
+    def toggle_expand(self):
+        """Toggle visibility of script text box."""
+        self.expanded = not self.expanded
+        
+        if self.expanded:
+            self.txt_script.setVisible(True)
+            self.txt_script.setMaximumHeight(100) # Expand
+        else:
+            self.txt_script.setVisible(False)
+            self.txt_script.setMaximumHeight(0)   # Collapse
+            
+    def _on_text_changed(self):
+        """Emit text changed signal."""
+        self.text_changed.emit(self.idx, self.txt_script.toPlainText())
+
+    def update_index(self, new_idx):
+        """Update index label when items are removed above."""
+        self.idx = new_idx
+        self.btn_header.setText(f"Snippet {new_idx + 1}")
 

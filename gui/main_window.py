@@ -4,33 +4,70 @@ from datetime import datetime
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QPushButton, QLabel, QTextEdit, QComboBox, QFileDialog,
                              QScrollArea, QFrame, QMessageBox)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
-from gui.custom_widgets import LogPanel, ImageCanvas
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
+from gui.custom_widgets import LogPanel, ImageCanvas, SnippetItemWidget
 from generation.video_generator import generate_video_from_snippets
+from audio.tts_handler import TTSHandler
 
 class VideoGeneratorWorker(QThread):
     """Background thread for video generation."""
     finished = pyqtSignal(bool, str)
     progress = pyqtSignal(str)
     
-    def __init__(self, image_path, snippets, output_path, aspect_ratio, show_boxes=False):
+    def __init__(self, image_path, snippets, output_path, aspect_ratio, tts_handler, voice="en-US-AriaNeural", show_boxes=False):
         super().__init__()
         self.image_path = image_path
         self.snippets = snippets
         self.output_path = output_path
         self.aspect_ratio = aspect_ratio
+        self.tts_handler = tts_handler
+        self.voice = voice
         self.show_boxes = show_boxes
     
     def run(self):
-        self.progress.emit("Generating video with Ken Burns effect...")
+        # Step 1: Generate Audio
+        self.progress.emit("Step 1/2: Generating Audio...")
+        
+        # Audio directory
+        audio_dir = os.path.join(os.path.dirname(self.output_path), "temp_audio")
+        os.makedirs(audio_dir, exist_ok=True)
+        
+        snippets_with_audio = []
+        
+        for i, snippet in enumerate(self.snippets):
+            snippets_with_audio.append(snippet.copy())
+            text = snippet.get('text', '').strip()
+            
+            if text:
+                self.progress.emit(f"Generating audio for snippet {i+1}...")
+                audio_filename = f"audio_{i}_{datetime.now().strftime('%H%M%S')}.mp3"
+                audio_path = os.path.join(audio_dir, audio_filename)
+                
+                success, duration = self.tts_handler.generate_audio(text, self.voice, audio_path)
+                
+                if success:
+                    snippets_with_audio[i]['audio_path'] = audio_path
+                    snippets_with_audio[i]['audio_duration'] = duration
+                else:
+                    self.progress.emit(f"Failed to generate audio for snippet {i+1}")
+            else:
+                snippets_with_audio[i]['audio_path'] = None
+                snippets_with_audio[i]['audio_duration'] = 0.0
+
+        # Step 2: Generate Video
+        self.progress.emit("Step 2/2: Generating Video...")
         success, message = generate_video_from_snippets(
             self.image_path,
-            self.snippets,
+            snippets_with_audio,
             self.output_path,
             self.aspect_ratio,
             self.show_boxes,
             progress_callback=lambda msg: self.progress.emit(msg)
         )
+        
+        # Cleanup temp audio
+        # shutil.rmtree(audio_dir, ignore_errors=True) # Keep for debugging or cleanup later
+        
         self.finished.emit(success, message)
 
 
@@ -42,6 +79,8 @@ class MainWindow(QMainWindow):
         self.ratio_name = ratio_name  # Store for video generation
         self.current_image_path = None  # Track current image
         self.video_worker = None  # Video generation thread
+        self.tts_handler = TTSHandler()
+        self.snippet_widgets = [] # replacing self.snippet_buttons
         
         # Ensure uploads dir
         self.uploads_dir = os.path.join(os.getcwd(), 'uploads')
@@ -188,17 +227,12 @@ class MainWindow(QMainWindow):
         separator.setStyleSheet("background-color: #555;")
         right_layout.addWidget(separator)
         
-        # Script Input
-        right_layout.addWidget(QLabel("Script:"))
-        self.text_input = QTextEdit()
-        self.text_input.setPlaceholderText("Enter video text...")
-        self.text_input.setMaximumHeight(100)
-        right_layout.addWidget(self.text_input)
+        # Custom Script Input Removed - scripts are now per-snippet
         
         # Voice Selection
         right_layout.addWidget(QLabel("Voice:"))
         self.voice_combo = QComboBox()
-        self.voice_combo.addItems(["Voice 1", "Voice 2", "Voice 3"])
+        self.voice_combo.addItems(self.tts_handler.get_voices())
         right_layout.addWidget(self.voice_combo)
         
         right_layout.addStretch()
@@ -253,10 +287,10 @@ class MainWindow(QMainWindow):
     
     def _clear_snippet_buttons(self):
         """Clear all snippet buttons from UI."""
-        for btn_row in self.snippet_buttons:
-            self.snippets_layout.removeWidget(btn_row)
-            btn_row.deleteLater()
-        self.snippet_buttons.clear()
+        for widget in self.snippet_widgets:
+            self.snippets_layout.removeWidget(widget)
+            widget.deleteLater()
+        self.snippet_widgets.clear()
 
     def toggle_snip_mode(self):
         """Toggle snip mode on the canvas."""
@@ -265,42 +299,33 @@ class MainWindow(QMainWindow):
     
     def on_snippet_created(self, idx, coords):
         """Called when a new snippet is created on the canvas."""
-        # Create button row with snippet button and delete button
-        btn_row = QWidget()
-        row_layout = QHBoxLayout(btn_row)
-        row_layout.setContentsMargins(0, 0, 0, 0)
-        row_layout.setSpacing(3)
-        
         # Get color from canvas
         color = self.canvas.snippets[idx]['color']
         color_hex = color.name()
         
-        btn_snippet = QPushButton(f"Snippet {idx + 1}")
-        btn_snippet.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {color_hex}; color: white; padding: 5px 10px;
-                border-radius: 3px; text-align: left; font-weight: bold;
-            }}
-            QPushButton:hover {{ opacity: 0.8; }}
-        """)
-        btn_snippet.clicked.connect(lambda checked, i=idx: self.on_snippet_click(i))
-        row_layout.addWidget(btn_snippet, stretch=1)
+        # Create SnippetItemWidget
+        widget = SnippetItemWidget(idx, color_hex)
         
-        btn_delete = QPushButton("×")
-        btn_delete.setFixedSize(25, 25)
-        btn_delete.setStyleSheet("""
-            QPushButton {
-                background-color: #666; color: white; border-radius: 3px;
-                font-weight: bold; font-size: 14px;
-            }
-            QPushButton:hover { background-color: #e74c3c; }
-        """)
-        btn_delete.clicked.connect(lambda checked, i=idx: self.on_snippet_delete(i))
-        row_layout.addWidget(btn_delete)
+        # Connect signals
+        widget.clicked.connect(self.on_snippet_click)
+        widget.deleted.connect(self.on_snippet_delete)
+        widget.text_changed.connect(self.on_script_changed)
         
-        # Insert before the stretch
-        self.snippets_layout.insertWidget(self.snippets_layout.count() - 1, btn_row)
-        self.snippet_buttons.append(btn_row)
+        # Add to layout and list
+        self.snippets_layout.addWidget(widget)
+        self.snippet_widgets.append(widget)
+        
+        self.log_panel.log(f"Snippet {idx+1} created. Click to add script.")
+        
+        # Init text field in snippet data
+        if 'text' not in self.canvas.snippets[idx]:
+            self.canvas.snippets[idx]['text'] = ""
+
+    def on_script_changed(self, idx, text):
+        """Handle script text changes."""
+        if 0 <= idx < len(self.canvas.snippets):
+            self.canvas.snippets[idx]['text'] = text
+        # No need to log every keystroke
     
     def on_snippet_click(self, idx):
         """Select a snippet on the canvas."""
@@ -308,40 +333,28 @@ class MainWindow(QMainWindow):
     
     def on_snippet_delete(self, idx):
         """Delete a snippet."""
-        if 0 <= idx < len(self.snippet_buttons):
-            # Remove button widget
-            btn_row = self.snippet_buttons.pop(idx)
-            self.snippets_layout.removeWidget(btn_row)
-            btn_row.deleteLater()
+        if 0 <= idx < len(self.snippet_widgets):
+            # Remove widget
+            widget = self.snippet_widgets.pop(idx)
+            self.snippets_layout.removeWidget(widget)
+            widget.deleteLater()
             
-            # Delete from canvas
+            # Delete from canvas (this also shifts snippet indices in canvas)
             self.canvas.delete_snippet(idx)
             
-            # Update remaining button indices
-            self._refresh_snippet_buttons()
-    
-    def _refresh_snippet_buttons(self):
-        """Refresh snippet button indices after deletion."""
-        for i, btn_row in enumerate(self.snippet_buttons):
-            layout = btn_row.layout()
-            btn_snippet = layout.itemAt(0).widget()
-            color = self.canvas.snippets[i]['color']
-            color_hex = color.name()
-            btn_snippet.setText(f"Snippet {i + 1}")
-            btn_snippet.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {color_hex}; color: white; padding: 5px 10px;
-                    border-radius: 3px; text-align: left; font-weight: bold;
-                }}
-                QPushButton:hover {{ opacity: 0.8; }}
-            """)
-            # Reconnect with correct index
-            btn_snippet.clicked.disconnect()
-            btn_snippet.clicked.connect(lambda checked, idx=i: self.on_snippet_click(idx))
+            # Update remaining widgets
+            self._refresh_snippet_widgets()
             
-            btn_delete = layout.itemAt(1).widget()
-            btn_delete.clicked.disconnect()
-            btn_delete.clicked.connect(lambda checked, idx=i: self.on_snippet_delete(idx))
+    def _refresh_snippet_widgets(self):
+        """Refresh snippet widget indices after deletion."""
+        for i, widget in enumerate(self.snippet_widgets):
+            widget.update_index(i)
+            # Reconnect signals with new index to capture correct closure
+            # Actually, signals might need re-binding, but since we bind 'idx' at emit time in widget...
+            # Wait, SnippetItemWidget emits 'idx' which is stored in the widget instance.
+            # We updated 'idx' in widget.update_index(i), so the emitted signal will carry the new index.
+            # We don't need to disconnect/reconnect here if the widget emits its own CURRENT index.
+            pass
 
     def generate_video(self):
         """Generate Ken Burns video from current image and snippets."""
@@ -369,7 +382,8 @@ class MainWindow(QMainWindow):
                 'x': rect.x(),
                 'y': rect.y(),
                 'width': rect.width(),
-                'height': rect.height()
+                'height': rect.height(),
+                'text': snippet.get('text', '') # Pass text
             })
         
         # Ask about box overlay
@@ -390,12 +404,17 @@ class MainWindow(QMainWindow):
         self.btn_generate.setEnabled(False)
         self.btn_generate.setText("Generating...")
         
+        # Get selected voice
+        voice = self.voice_combo.currentText()
+        
         # Start worker thread
         self.video_worker = VideoGeneratorWorker(
             self.current_image_path,
             snippets_data,
             output_path,
             self.ratio_name,
+            self.tts_handler,
+            voice,
             show_boxes
         )
         self.video_worker.progress.connect(self.on_video_progress)
