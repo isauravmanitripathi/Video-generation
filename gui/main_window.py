@@ -4,9 +4,10 @@ from datetime import datetime
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QPushButton, QLabel, QTextEdit, QComboBox, QFileDialog,
                              QScrollArea, QFrame, QMessageBox, QMenuBar, QMenu, QAction,
-                             QActionGroup, QToolBar)
+                             QActionGroup, QToolBar, QDialog)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from gui.custom_widgets import LogPanel, ImageCanvas, SnippetItemWidget
+from gui.dialogs import AspectRatioDialog, VideoOptionsDialog
 from generation.video_generator import generate_video_from_snippets
 from audio.tts_handler import TTSHandler
 
@@ -454,35 +455,17 @@ class MainWindow(QMainWindow):
                 'text': snippet.get('text', '') # Pass text
             })
         
-        # Ask about box overlay
-        show_boxes = QMessageBox.question(
-            self,
-            "Box Overlay",
-            "Do you want to show a border box around each snippet region in the video?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
-        ) == QMessageBox.Yes
+        # Show video options dialog
+        options_dialog = VideoOptionsDialog(self)
+        if options_dialog.exec_() != QDialog.Accepted:
+            return  # User cancelled
         
-        if show_boxes:
-            self.log_panel.log("Box overlay: Enabled - borders will be drawn around snippets")
-        else:
-            self.log_panel.log("Box overlay: Disabled")
+        options = options_dialog.get_options()
+        show_boxes = options['show_boxes']
+        ken_burns = options['ken_burns']
         
-        # Ask about Ken Burns effect
-        ken_burns = QMessageBox.question(
-            self,
-            "Ken Burns Effect",
-            "Do you want smooth zoom/pan animation between snippets?\n\n"
-            "Yes = Smooth Ken Burns animation\n"
-            "No = Instant jump cuts (no animation time)",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes
-        ) == QMessageBox.Yes
-        
-        if ken_burns:
-            self.log_panel.log("Ken Burns effect: Enabled - smooth animation between snippets")
-        else:
-            self.log_panel.log("Ken Burns effect: Disabled - instant jump cuts")
+        # Log selected options
+        self.log_panel.log(f"Options: Ken Burns={'Enabled' if ken_burns else 'Disabled'}, Box Overlay={'Enabled' if show_boxes else 'Disabled'}")
         
         # Disable button during generation
         self.btn_generate.setEnabled(False)
