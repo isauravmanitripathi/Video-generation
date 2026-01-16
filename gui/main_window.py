@@ -198,8 +198,8 @@ class MainWindow(QMainWindow):
         right_layout = QVBoxLayout(right_container)
         right_container.setStyleSheet("background-color: #333; color: white;")
         
-        lbl_settings = QLabel("Settings")
-        lbl_settings.setStyleSheet("font-size: 18px; font-weight: bold; margin-bottom: 10px;")
+        lbl_settings = QLabel("✦ Storyboard")
+        lbl_settings.setStyleSheet("font-size: 18px; font-weight: bold; margin-bottom: 10px; color: #5a9bd6;")
         right_layout.addWidget(lbl_settings)
         
         # === Snippets Section ===
