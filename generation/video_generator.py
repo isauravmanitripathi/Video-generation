@@ -56,7 +56,8 @@ class KenBurnsGenerator:
         max_zoom: float = 4.0,
         show_boxes: bool = False,
         box_color: str = "red",
-        box_thickness: int = 4
+        box_thickness: int = 4,
+        ken_burns: bool = True
     ):
         self.image_path = image_path
         # Normalize snippets to Snippet objects
@@ -73,10 +74,20 @@ class KenBurnsGenerator:
         self.output_width = output_width
         self.output_height = output_height
         self.fps = fps
-        self.intro_duration = intro_duration
-        self.snippet_duration = snippet_duration
+        self.ken_burns = ken_burns
+        
+        # When Ken Burns is disabled, set all animation durations to 0
+        # This creates instant jump cuts between snippets
+        if ken_burns:
+            self.intro_duration = intro_duration
+            self.snippet_duration = snippet_duration
+            self.outro_duration = outro_duration
+        else:
+            self.intro_duration = 0.0
+            self.snippet_duration = 0.0
+            self.outro_duration = 0.0
+        
         self.hold_duration = hold_duration
-        self.outro_duration = outro_duration
         self.min_zoom = min_zoom
         self.max_zoom = max_zoom
         self.show_boxes = show_boxes
@@ -516,6 +527,7 @@ def generate_video_from_snippets(
     output_path: str,
     aspect_ratio: str = "9:16",
     show_boxes: bool = False,
+    ken_burns: bool = True,
     progress_callback=None
 ) -> Tuple[bool, str]:
     """
@@ -526,6 +538,8 @@ def generate_video_from_snippets(
         snippets: List of snippet dicts with x, y, w, h keys
         output_path: Path for output video
         aspect_ratio: "9:16", "16:9", or "1:1"
+        show_boxes: Whether to show box overlay around snippets
+        ken_burns: Whether to use Ken Burns animation (True) or instant cuts (False)
         progress_callback: Optional callback for progress
     
     Returns:
@@ -567,7 +581,8 @@ def generate_video_from_snippets(
         snippets=normalized_snippets,
         output_width=width,
         output_height=height,
-        show_boxes=show_boxes
+        show_boxes=show_boxes,
+        ken_burns=ken_burns
     )
     
     return generator.generate(output_path, progress_callback)

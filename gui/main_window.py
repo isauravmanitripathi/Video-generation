@@ -14,7 +14,7 @@ class VideoGeneratorWorker(QThread):
     finished = pyqtSignal(bool, str)
     progress = pyqtSignal(str)
     
-    def __init__(self, image_path, snippets, output_path, aspect_ratio, tts_handler, voice="en-US-AriaNeural", show_boxes=False):
+    def __init__(self, image_path, snippets, output_path, aspect_ratio, tts_handler, voice="en-US-AriaNeural", show_boxes=False, ken_burns=True):
         super().__init__()
         self.image_path = image_path
         self.snippets = snippets
@@ -23,6 +23,7 @@ class VideoGeneratorWorker(QThread):
         self.tts_handler = tts_handler
         self.voice = voice
         self.show_boxes = show_boxes
+        self.ken_burns = ken_burns
     
     def run(self):
         # Step 1: Generate Audio
@@ -62,6 +63,7 @@ class VideoGeneratorWorker(QThread):
             self.output_path,
             self.aspect_ratio,
             self.show_boxes,
+            self.ken_burns,
             progress_callback=lambda msg: self.progress.emit(msg)
         )
         
@@ -400,6 +402,22 @@ class MainWindow(QMainWindow):
         else:
             self.log_panel.log("Box overlay: Disabled")
         
+        # Ask about Ken Burns effect
+        ken_burns = QMessageBox.question(
+            self,
+            "Ken Burns Effect",
+            "Do you want smooth zoom/pan animation between snippets?\n\n"
+            "Yes = Smooth Ken Burns animation\n"
+            "No = Instant jump cuts (no animation time)",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes
+        ) == QMessageBox.Yes
+        
+        if ken_burns:
+            self.log_panel.log("Ken Burns effect: Enabled - smooth animation between snippets")
+        else:
+            self.log_panel.log("Ken Burns effect: Disabled - instant jump cuts")
+        
         # Disable button during generation
         self.btn_generate.setEnabled(False)
         self.btn_generate.setText("Generating...")
@@ -415,7 +433,8 @@ class MainWindow(QMainWindow):
             self.ratio_name,
             self.tts_handler,
             voice,
-            show_boxes
+            show_boxes,
+            ken_burns
         )
         self.video_worker.progress.connect(self.on_video_progress)
         self.video_worker.finished.connect(self.on_video_finished)
