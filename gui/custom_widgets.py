@@ -524,8 +524,8 @@ class ImageCanvas(QWidget):
 
 class SnippetItemWidget(QWidget):
     """
-    A widget representing a snippet in the list.
-    Contains a header button, a delete button, and an expandable script text box.
+    A modern snippet widget with smooth animations and better text handling.
+    Contains a header button, status indicator, delete button, and expandable script text.
     """
     text_changed = pyqtSignal(int, str)  # idx, text
     clicked = pyqtSignal(int)            # idx
@@ -534,91 +534,185 @@ class SnippetItemWidget(QWidget):
     def __init__(self, idx, color_hex, text=""):
         super().__init__()
         self.idx = idx
+        self.color_hex = color_hex
         self.expanded = False
+        self._target_height = 0
+        
+        # Main styling
+        self.setStyleSheet(f"""
+            SnippetItemWidget {{
+                background-color: #252525;
+                border-radius: 8px;
+                border: 1px solid #3a3a3a;
+            }}
+            SnippetItemWidget:hover {{
+                border: 1px solid #4a4a4a;
+            }}
+        """)
         
         # Main layout
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 5, 0, 5)
-        layout.setSpacing(2)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
         
         # --- Header Row ---
         header_widget = QWidget()
         header_layout = QHBoxLayout(header_widget)
         header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(8)
         
-        # Snippet Button (Color + Label)
-        self.btn_header = QPushButton(f"Snippet {idx + 1}")
-        self.btn_header.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {color_hex}; 
-                color: white; 
-                padding: 8px;
+        # Color indicator bar
+        self.color_bar = QFrame()
+        self.color_bar.setFixedSize(4, 36)
+        self.color_bar.setStyleSheet(f"background-color: {color_hex}; border-radius: 2px;")
+        header_layout.addWidget(self.color_bar)
+        
+        # Snippet info container
+        info_layout = QVBoxLayout()
+        info_layout.setSpacing(2)
+        info_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Title
+        self.lbl_title = QLabel(f"Snippet {idx + 1}")
+        self.lbl_title.setStyleSheet("font-size: 13px; font-weight: bold; color: #fff;")
+        info_layout.addWidget(self.lbl_title)
+        
+        # Preview text (truncated)
+        preview = text[:50] + "..." if len(text) > 50 else text if text else "No script yet"
+        self.lbl_preview = QLabel(preview)
+        self.lbl_preview.setStyleSheet("font-size: 11px; color: #888;")
+        self.lbl_preview.setWordWrap(False)
+        info_layout.addWidget(self.lbl_preview)
+        
+        header_layout.addLayout(info_layout, 1)
+        
+        # Expand button
+        self.btn_expand = QPushButton("▼")
+        self.btn_expand.setFixedSize(32, 32)
+        self.btn_expand.setCursor(Qt.PointingHandCursor)
+        self.btn_expand.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                color: #888;
                 border: 1px solid #444;
                 border-radius: 4px;
-                text-align: left;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{ opacity: 0.9; border: 1px solid #fff; }}
+                font-size: 10px;
+            }
+            QPushButton:hover {
+                background-color: #3a3a3a;
+                color: #fff;
+            }
         """)
-        self.btn_header.clicked.connect(self._on_header_click)
-        header_layout.addWidget(self.btn_header, 8)
+        self.btn_expand.clicked.connect(self.toggle_expand)
+        header_layout.addWidget(self.btn_expand)
         
-        # Delete Button
+        # Delete button
         self.btn_delete = QPushButton("×")
-        self.btn_delete.setFixedSize(30, 30)
+        self.btn_delete.setFixedSize(32, 32)
+        self.btn_delete.setCursor(Qt.PointingHandCursor)
         self.btn_delete.setStyleSheet("""
             QPushButton {
-                background-color: #d32f2f; color: white; 
-                border-radius: 4px; font-weight: bold; font-size: 16px;
+                background-color: transparent;
+                color: #888;
+                border: 1px solid #444;
+                border-radius: 4px;
+                font-size: 16px;
+                font-weight: bold;
             }
-            QPushButton:hover { background-color: #b71c1c; }
+            QPushButton:hover {
+                background-color: #d32f2f;
+                color: white;
+                border-color: #d32f2f;
+            }
         """)
         self.btn_delete.clicked.connect(lambda: self.deleted.emit(self.idx))
-        header_layout.addWidget(self.btn_delete, 1)
+        header_layout.addWidget(self.btn_delete)
         
         layout.addWidget(header_widget)
         
-        # --- Script Text Area ---
+        # Clickable header area
+        self.btn_header = QPushButton()
+        self.btn_header.setFixedHeight(0)
+        self.btn_header.setVisible(False)
+        self.btn_header.clicked.connect(self._on_header_click)
+        
+        # Make header clickable for selection
+        header_widget.mousePressEvent = lambda e: self._on_header_click()
+        header_widget.setCursor(Qt.PointingHandCursor)
+        
+        # --- Script Text Area (Expandable) ---
+        self.txt_container = QWidget()
+        self.txt_container.setMaximumHeight(0)
+        txt_layout = QVBoxLayout(self.txt_container)
+        txt_layout.setContentsMargins(0, 0, 0, 0)
+        
         self.txt_script = QTextEdit()
-        self.txt_script.setPlaceholderText("Type script here (e.g. 'This is the main title...')")
-        self.txt_script.setFixedHeight(0)
-        self.txt_script.setMaximumHeight(0) # Start hidden
-        self.txt_script.setVisible(False)
+        self.txt_script.setPlaceholderText("Type your voice-over script here...")
+        self.txt_script.setMinimumHeight(80)
         self.txt_script.setStyleSheet("""
             QTextEdit {
-                background-color: #2b2b2b;
+                background-color: #1e1e1e;
                 color: #ddd;
                 border: 1px solid #444;
-                border-radius: 4px;
-                padding: 4px;
+                border-radius: 6px;
+                padding: 10px;
+                font-size: 12px;
+                line-height: 1.4;
+            }
+            QTextEdit:focus {
+                border: 1px solid #5a9bd6;
             }
         """)
         self.txt_script.setText(text)
         self.txt_script.textChanged.connect(self._on_text_changed)
-        layout.addWidget(self.txt_script)
+        txt_layout.addWidget(self.txt_script)
+        
+        layout.addWidget(self.txt_container)
+        
+        # Animation for expand/collapse
+        from PyQt5.QtCore import QPropertyAnimation
+        self._animation = QPropertyAnimation(self.txt_container, b"maximumHeight")
+        self._animation.setDuration(200)
         
     def _on_header_click(self):
-        """Toggle text box and emit clicked signal."""
+        """Emit clicked signal for selection."""
         self.clicked.emit(self.idx)
-        self.toggle_expand()
         
     def toggle_expand(self):
-        """Toggle visibility of script text box."""
+        """Animate expand/collapse of script text box."""
         self.expanded = not self.expanded
         
+        self._animation.stop()
         if self.expanded:
-            self.txt_script.setVisible(True)
-            self.txt_script.setMaximumHeight(100) # Expand
+            self._animation.setStartValue(0)
+            self._animation.setEndValue(120)
+            self.btn_expand.setText("▲")
         else:
-            self.txt_script.setVisible(False)
-            self.txt_script.setMaximumHeight(0)   # Collapse
-            
+            self._animation.setStartValue(self.txt_container.height())
+            self._animation.setEndValue(0)
+            self.btn_expand.setText("▼")
+        
+        self._animation.start()
+        
     def _on_text_changed(self):
-        """Emit text changed signal."""
-        self.text_changed.emit(self.idx, self.txt_script.toPlainText())
+        """Update preview and emit signal."""
+        text = self.txt_script.toPlainText()
+        preview = text[:50] + "..." if len(text) > 50 else text if text else "No script yet"
+        self.lbl_preview.setText(preview)
+        self.text_changed.emit(self.idx, text)
 
     def update_index(self, new_idx):
-        """Update index label when items are removed above."""
+        """Update index label."""
         self.idx = new_idx
-        self.btn_header.setText(f"Snippet {new_idx + 1}")
+        self.lbl_title.setText(f"Snippet {new_idx + 1}")
+    
+    def set_assigned_style(self, assigned):
+        """Update style based on assignment status."""
+        if assigned:
+            self.color_bar.setStyleSheet(f"background-color: #2ecc71; border-radius: 2px;")
+            self.lbl_title.setStyleSheet("font-size: 13px; font-weight: bold; color: #2ecc71;")
+        else:
+            self.color_bar.setStyleSheet(f"background-color: {self.color_hex}; border-radius: 2px;")
+            self.lbl_title.setStyleSheet("font-size: 13px; font-weight: bold; color: #fff;")
+
 

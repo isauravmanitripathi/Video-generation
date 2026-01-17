@@ -196,61 +196,119 @@ class MainWindow(QMainWindow):
         center_layout.addLayout(zoom_layout)
 
         
-        # --- 3. Right Panel: Settings ---
+        # --- 3. Right Panel: Storyboard ---
         right_container = QWidget()
         right_layout = QVBoxLayout(right_container)
-        right_container.setStyleSheet("background-color: #333; color: white;")
+        right_layout.setContentsMargins(15, 15, 15, 15)
+        right_layout.setSpacing(12)
+        right_container.setStyleSheet("""
+            QWidget {
+                background-color: #1e1e1e;
+            }
+        """)
         
+        # Header
         lbl_settings = QLabel("✦ Storyboard")
-        lbl_settings.setStyleSheet("font-size: 18px; font-weight: bold; margin-bottom: 10px; color: #5a9bd6;")
+        lbl_settings.setStyleSheet("""
+            font-size: 20px; 
+            font-weight: bold; 
+            color: #5a9bd6;
+            padding: 5px 0;
+        """)
         right_layout.addWidget(lbl_settings)
         
         # === Snippets Section ===
-        lbl_snippets = QLabel("Snippets")
-        lbl_snippets.setStyleSheet("font-size: 14px; font-weight: bold; margin-top: 10px;")
-        right_layout.addWidget(lbl_snippets)
+        snippets_header = QWidget()
+        snippets_header_layout = QHBoxLayout(snippets_header)
+        snippets_header_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Scrollable container for snippet buttons
+        lbl_snippets = QLabel("Scenes")
+        lbl_snippets.setStyleSheet("font-size: 12px; font-weight: bold; color: #888; text-transform: uppercase;")
+        snippets_header_layout.addWidget(lbl_snippets)
+        
+        snippets_header_layout.addStretch()
+        
+        # Snippet count badge
+        self.lbl_snippet_count = QLabel("0")
+        self.lbl_snippet_count.setFixedSize(24, 24)
+        self.lbl_snippet_count.setAlignment(Qt.AlignCenter)
+        self.lbl_snippet_count.setStyleSheet("""
+            background-color: #3a3a3a;
+            color: #888;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: bold;
+        """)
+        snippets_header_layout.addWidget(self.lbl_snippet_count)
+        
+        right_layout.addWidget(snippets_header)
+        
+        # Scrollable container for snippet buttons - now flexible height
         snippets_scroll = QScrollArea()
         snippets_scroll.setWidgetResizable(True)
-        snippets_scroll.setMaximumHeight(200)
+        snippets_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         snippets_scroll.setStyleSheet("""
-            QScrollArea { border: 1px solid #555; background-color: #2a2a2a; }
+            QScrollArea { 
+                border: none; 
+                background-color: transparent;
+            }
+            QScrollBar:vertical {
+                background-color: #2a2a2a;
+                width: 8px;
+                border-radius: 4px;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #4a4a4a;
+                border-radius: 4px;
+                min-height: 30px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background-color: #5a9bd6;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0;
+            }
         """)
         
         self.snippets_container = QWidget()
+        self.snippets_container.setStyleSheet("background-color: transparent;")
         self.snippets_layout = QVBoxLayout(self.snippets_container)
-        self.snippets_layout.setContentsMargins(5, 5, 5, 5)
-        self.snippets_layout.setSpacing(5)
+        self.snippets_layout.setContentsMargins(0, 0, 0, 0)
+        self.snippets_layout.setSpacing(8)
         self.snippets_layout.addStretch()
         
         snippets_scroll.setWidget(self.snippets_container)
-        right_layout.addWidget(snippets_scroll)
+        right_layout.addWidget(snippets_scroll, 1)  # Takes remaining space
         
         # Connect canvas signals
         self.canvas.snippet_created.connect(self.on_snippet_created)
         self.snippet_buttons = []  # Track buttons
         
-        # Separator
-        separator = QFrame()
-        separator.setFrameShape(QFrame.HLine)
-        separator.setStyleSheet("background-color: #555;")
-        right_layout.addWidget(separator)
-        
-        # Custom Script Input Removed - scripts are now per-snippet
-        # Voice selection moved to top menu bar
-        
-        right_layout.addStretch()
-        
-        # Generate Button
-        self.btn_generate = QPushButton("Generate Video")
+        # Generate Button - fixed at bottom
+        self.btn_generate = QPushButton("✨ Generate Video")
+        self.btn_generate.setFixedHeight(50)
+        self.btn_generate.setCursor(Qt.PointingHandCursor)
         self.btn_generate.setStyleSheet("""
             QPushButton {
-                background-color: #5a9bd6; color: white; padding: 12px; 
-                font-size: 16px; border-radius: 5px; font-weight: bold;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #5a9bd6, stop:1 #4a8bc6);
+                color: white; 
+                font-size: 15px; 
+                border-radius: 8px; 
+                font-weight: bold;
+                border: none;
             }
-            QPushButton:hover { background-color: #4a8bc6; }
-            QPushButton:disabled { background-color: #666; }
+            QPushButton:hover { 
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #6aabf6, stop:1 #5a9bd6);
+            }
+            QPushButton:pressed {
+                background: #4a8bc6;
+            }
+            QPushButton:disabled { 
+                background-color: #3a3a3a;
+                color: #666;
+            }
         """)
         self.btn_generate.clicked.connect(self.generate_video)
         right_layout.addWidget(self.btn_generate)
@@ -392,7 +450,8 @@ class MainWindow(QMainWindow):
                     widget.text_changed.connect(self._on_pending_text_changed)
                     
                     # Mark as unassigned visually
-                    widget.btn_header.setText(f"📍 Snippet {i+1} (click to assign region)")
+                    widget.lbl_title.setText(f"📍 Snippet {i+1}")
+                    widget.lbl_preview.setText("Click to assign region")
                     
                     self.snippets_layout.addWidget(widget)
                     self.snippet_widgets.append(widget)
@@ -434,28 +493,22 @@ class MainWindow(QMainWindow):
                 # Highlight the selected widget
                 for i, widget in enumerate(self.snippet_widgets):
                     if i == idx:
-                        widget.btn_header.setStyleSheet(f"""
-                            QPushButton {{
-                                background-color: {pending['color']}; 
-                                color: white; 
-                                padding: 8px;
-                                border: 3px solid #fff;
-                                border-radius: 4px;
-                                text-align: left;
-                                font-weight: bold;
-                            }}
+                        # Highlight selected
+                        widget.setStyleSheet("""
+                            SnippetItemWidget {
+                                background-color: #252525;
+                                border-radius: 8px;
+                                border: 2px solid #5a9bd6;
+                            }
                         """)
                     elif i < len(self.pending_snippets) and not self.pending_snippets[i]['assigned']:
-                        widget.btn_header.setStyleSheet(f"""
-                            QPushButton {{
-                                background-color: {self.pending_snippets[i]['color']}; 
-                                color: white; 
-                                padding: 8px;
-                                border: 1px solid #444;
-                                border-radius: 4px;
-                                text-align: left;
-                                font-weight: bold;
-                            }}
+                        # Reset non-selected
+                        widget.setStyleSheet("""
+                            SnippetItemWidget {
+                                background-color: #252525;
+                                border-radius: 8px;
+                                border: 1px solid #3a3a3a;
+                            }
                         """)
             else:
                 # Already assigned, just select on canvas
@@ -542,20 +595,9 @@ class MainWindow(QMainWindow):
                 widget_idx = self.selected_pending_idx
                 if widget_idx < len(self.snippet_widgets):
                     widget = self.snippet_widgets[widget_idx]
-                    color = pending['color']
-                    widget.btn_header.setText(f"✓ Snippet {widget_idx + 1}")
-                    widget.btn_header.setStyleSheet(f"""
-                        QPushButton {{
-                            background-color: {color}; 
-                            color: white; 
-                            padding: 8px;
-                            border: 2px solid #2ecc71;
-                            border-radius: 4px;
-                            text-align: left;
-                            font-weight: bold;
-                        }}
-                        QPushButton:hover {{ border: 2px solid #fff; }}
-                    """)
+                    widget.lbl_title.setText(f"✓ Snippet {widget_idx + 1}")
+                    widget.set_assigned_style(True)
+                    widget.lbl_preview.setText(pending['text'][:50] + "..." if len(pending['text']) > 50 else pending['text'])
                     # Reconnect signals to use canvas index
                     widget.clicked.disconnect()
                     widget.clicked.connect(lambda checked=False, ci=idx: self.canvas.select_snippet(ci))
