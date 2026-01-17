@@ -1,5 +1,6 @@
 import os
 import shutil
+import json
 from datetime import datetime
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QPushButton, QLabel, QTextEdit, QComboBox, QFileDialog,
@@ -84,7 +85,9 @@ class MainWindow(QMainWindow):
         self.current_image_path = None  # Track current image
         self.video_worker = None  # Video generation thread
         self.tts_handler = TTSHandler()
-        self.snippet_widgets = [] # replacing self.snippet_buttons
+        self.snippet_widgets = []  # replacing self.snippet_buttons
+        self.pending_snippets = []  # Queue of imported but unassigned snippets
+        self.selected_pending_idx = None  # Currently selected pending snippet awaiting region
         
         # Ensure uploads dir
         self.uploads_dir = os.path.join(os.getcwd(), 'uploads')
@@ -319,11 +322,163 @@ class MainWindow(QMainWindow):
             action.triggered.connect(lambda checked, v=voice: self._on_voice_selected(v))
             self.voice_action_group.addAction(action)
             voice_menu.addAction(action)
+        
+        # Files Menu
+        files_menu = menubar.addMenu("📁 Files")
+        
+        upload_json_action = QAction("Upload JSON", self)
+        upload_json_action.triggered.connect(self._on_upload_json)
+        files_menu.addAction(upload_json_action)
     
     def _on_voice_selected(self, voice):
         """Handle voice selection from menu."""
         self.selected_voice = voice
         self.log_panel.log(f"Voice changed to: {voice}")
+    
+    def _on_upload_json(self):
+        """Handle JSON file upload from Files menu."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, 
+            "Select JSON File", 
+            "", 
+            "JSON Files (*.json)"
+        )
+        if file_path:
+            self._parse_json_snippets(file_path)
+    
+    def _parse_json_snippets(self, file_path):
+        """Parse JSON file and create snippet widgets immediately."""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            # Validate structure
+            if 'snippets' not in data:
+                self.log_panel.log("Error: JSON must have 'snippets' array")
+                QMessageBox.warning(self, "Invalid JSON", "JSON file must contain a 'snippets' array.")
+                return
+            
+            snippets = data['snippets']
+            if not isinstance(snippets, list) or len(snippets) == 0:
+                self.log_panel.log("Error: 'snippets' must be a non-empty array")
+                QMessageBox.warning(self, "Invalid JSON", "'snippets' must be a non-empty array.")
+                return
+            
+            # Clear existing snippets
+            self._clear_snippet_buttons()
+            self.canvas.clear_snippets()
+            self.pending_snippets.clear()
+            
+            # Create snippet widgets for each imported snippet
+            colors = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6', '#1abc9c', '#e91e63', '#00bcd4']
+            
+            for i, snippet in enumerate(snippets):
+                if 'text' in snippet:
+                    color_hex = colors[i % len(colors)]
+                    
+                    # Store pending snippet data
+                    self.pending_snippets.append({
+                        'id': snippet.get('id', str(i + 1)),
+                        'text': snippet['text'],
+                        'assigned': False,
+                        'widget_idx': i,
+                        'color': color_hex
+                    })
+                    
+                    # Create widget (without canvas snippet yet)
+                    widget = SnippetItemWidget(i, color_hex, text=snippet['text'])
+                    widget.clicked.connect(self._on_pending_snippet_click)
+                    widget.deleted.connect(self._on_pending_snippet_delete)
+                    widget.text_changed.connect(self._on_pending_text_changed)
+                    
+                    # Mark as unassigned visually
+                    widget.btn_header.setText(f"📍 Snippet {i+1} (click to assign region)")
+                    
+                    self.snippets_layout.addWidget(widget)
+                    self.snippet_widgets.append(widget)
+            
+            title = data.get('title', 'Untitled Project')
+            self.log_panel.log(f"Imported '{title}' with {len(self.pending_snippets)} snippets.")
+            self.log_panel.log("Click a snippet, then draw its region on the image.")
+            
+            QMessageBox.information(
+                self, 
+                "JSON Imported", 
+                f"Created {len(self.pending_snippets)} snippets.\n\n"
+                "Workflow:\n"
+                "1. Click a snippet in the Storyboard\n"
+                "2. Click 'Snip' and draw the region on the image\n"
+                "3. Repeat for each snippet"
+            )
+            
+        except json.JSONDecodeError as e:
+            self.log_panel.log(f"Error: Invalid JSON format - {e}")
+            QMessageBox.warning(self, "JSON Error", f"Invalid JSON format:\n{e}")
+        except Exception as e:
+            self.log_panel.log(f"Error parsing JSON: {e}")
+            QMessageBox.warning(self, "Error", f"Failed to parse JSON:\n{e}")
+    
+    def _on_pending_snippet_click(self, idx):
+        """Handle click on a pending (unassigned) snippet."""
+        if 0 <= idx < len(self.pending_snippets):
+            pending = self.pending_snippets[idx]
+            if not pending['assigned']:
+                # Set this as the snippet awaiting region assignment
+                self.selected_pending_idx = idx
+                self.log_panel.log(f"Selected snippet {idx+1}. Now draw its region on the image.")
+                
+                # Enable snip mode automatically
+                self.btn_snip.setChecked(True)
+                self.canvas.set_snip_mode(True)
+                
+                # Highlight the selected widget
+                for i, widget in enumerate(self.snippet_widgets):
+                    if i == idx:
+                        widget.btn_header.setStyleSheet(f"""
+                            QPushButton {{
+                                background-color: {pending['color']}; 
+                                color: white; 
+                                padding: 8px;
+                                border: 3px solid #fff;
+                                border-radius: 4px;
+                                text-align: left;
+                                font-weight: bold;
+                            }}
+                        """)
+                    elif i < len(self.pending_snippets) and not self.pending_snippets[i]['assigned']:
+                        widget.btn_header.setStyleSheet(f"""
+                            QPushButton {{
+                                background-color: {self.pending_snippets[i]['color']}; 
+                                color: white; 
+                                padding: 8px;
+                                border: 1px solid #444;
+                                border-radius: 4px;
+                                text-align: left;
+                                font-weight: bold;
+                            }}
+                        """)
+            else:
+                # Already assigned, just select on canvas
+                self.canvas.select_snippet(idx)
+    
+    def _on_pending_snippet_delete(self, idx):
+        """Delete a pending snippet."""
+        if 0 <= idx < len(self.snippet_widgets):
+            widget = self.snippet_widgets.pop(idx)
+            self.snippets_layout.removeWidget(widget)
+            widget.deleteLater()
+            
+            if idx < len(self.pending_snippets):
+                self.pending_snippets.pop(idx)
+            
+            # Update indices
+            for i, w in enumerate(self.snippet_widgets):
+                w.update_index(i)
+    
+    def _on_pending_text_changed(self, idx, text):
+        """Handle text change on pending snippet."""
+        if 0 <= idx < len(self.pending_snippets):
+            self.pending_snippets[idx]['text'] = text
     
     def open_upload_dialog(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Select Image", "", "Images (*.png *.jpg *.jpeg *.bmp)")
@@ -367,28 +522,73 @@ class MainWindow(QMainWindow):
         self.canvas.set_snip_mode(enabled)
     
     def on_snippet_created(self, idx, coords):
-        """Called when a new snippet is created on the canvas."""
-        # Get color from canvas
+        """Called when a new snippet region is drawn on the canvas."""
+        # Check if we're assigning a region to a pending snippet
+        if self.selected_pending_idx is not None and self.selected_pending_idx < len(self.pending_snippets):
+            pending = self.pending_snippets[self.selected_pending_idx]
+            
+            if not pending['assigned']:
+                # Get the canvas snippet that was just created
+                canvas_snippet = self.canvas.snippets[idx]
+                
+                # Store the source_rect and text in the canvas snippet
+                canvas_snippet['text'] = pending['text']
+                
+                # Mark pending as assigned
+                pending['assigned'] = True
+                pending['canvas_idx'] = idx
+                
+                # Update the widget to show it's assigned
+                widget_idx = self.selected_pending_idx
+                if widget_idx < len(self.snippet_widgets):
+                    widget = self.snippet_widgets[widget_idx]
+                    color = pending['color']
+                    widget.btn_header.setText(f"✓ Snippet {widget_idx + 1}")
+                    widget.btn_header.setStyleSheet(f"""
+                        QPushButton {{
+                            background-color: {color}; 
+                            color: white; 
+                            padding: 8px;
+                            border: 2px solid #2ecc71;
+                            border-radius: 4px;
+                            text-align: left;
+                            font-weight: bold;
+                        }}
+                        QPushButton:hover {{ border: 2px solid #fff; }}
+                    """)
+                    # Reconnect signals to use canvas index
+                    widget.clicked.disconnect()
+                    widget.clicked.connect(lambda checked=False, ci=idx: self.canvas.select_snippet(ci))
+                
+                self.log_panel.log(f"Region assigned to Snippet {widget_idx + 1}")
+                
+                # Clear selection and disable snip mode
+                self.selected_pending_idx = None
+                self.btn_snip.setChecked(False)
+                self.canvas.set_snip_mode(False)
+                
+                # Check if all snippets are assigned
+                unassigned = [p for p in self.pending_snippets if not p['assigned']]
+                if unassigned:
+                    self.log_panel.log(f"{len(unassigned)} snippets still need regions.")
+                else:
+                    self.log_panel.log("All snippets assigned! Ready to generate video.")
+                return
+        
+        # Normal flow: create a new snippet widget (for non-JSON workflow)
         color = self.canvas.snippets[idx]['color']
         color_hex = color.name()
         
-        # Create SnippetItemWidget
-        widget = SnippetItemWidget(idx, color_hex)
-        
-        # Connect signals
+        widget = SnippetItemWidget(idx, color_hex, text="")
         widget.clicked.connect(self.on_snippet_click)
         widget.deleted.connect(self.on_snippet_delete)
         widget.text_changed.connect(self.on_script_changed)
         
-        # Add to layout and list
         self.snippets_layout.addWidget(widget)
         self.snippet_widgets.append(widget)
         
         self.log_panel.log(f"Snippet {idx+1} created. Click to add script.")
-        
-        # Init text field in snippet data
-        if 'text' not in self.canvas.snippets[idx]:
-            self.canvas.snippets[idx]['text'] = ""
+        self.canvas.snippets[idx]['text'] = ""
 
     def on_script_changed(self, idx, text):
         """Handle script text changes."""

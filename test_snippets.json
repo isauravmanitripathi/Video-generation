@@ -1,0 +1,8 @@
+{
+  "title": "Test Video Project",
+  "snippets": [
+    {"id": "1", "text": "Welcome to this demonstration video about Python programming."},
+    {"id": "2", "text": "Here we can see the basic syntax structure of the language."},
+    {"id": "3", "text": "Notice how clean and readable Python code is compared to other languages."}
+  ]
+}
