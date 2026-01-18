@@ -57,7 +57,8 @@ class KenBurnsGenerator:
         show_boxes: bool = False,
         box_color: str = "red",
         box_thickness: int = 4,
-        ken_burns: bool = True
+        ken_burns: bool = True,
+        sub_images: List[dict] = None
     ):
         self.image_path = image_path
         # Normalize snippets to Snippet objects
@@ -75,6 +76,7 @@ class KenBurnsGenerator:
         self.output_height = output_height
         self.fps = fps
         self.ken_burns = ken_burns
+        self.sub_images = sub_images or []  # Store sub-images
         
         # When Ken Burns is disabled, set all animation durations to 0
         # This creates instant jump cuts between snippets
@@ -412,6 +414,78 @@ class KenBurnsGenerator:
             
             # Update time for next snippet
             current_time = hold_end
+        
+        # --- Sub-Image Overlays ---
+        # Track sub-image inputs and overlay filters
+        sub_image_inputs = []
+        sub_image_overlays = []
+        sub_image_audio_labels = []
+        
+        video_duration = self.keyframes[-1].frame / self.fps if self.keyframes else 1
+        
+        # First pass: collect all sub-image audio (goes into audio_inputs)
+        for idx, sub_img in enumerate(self.sub_images):
+            # Calculate when the sub-image should appear
+            after_snip_idx = sub_img.get('after_snip', 0)
+            
+            # Find the end time of the referenced snip
+            sub_start_time = self.intro_duration
+            for i in range(min(after_snip_idx + 1, len(self.snippets))):
+                snippet = self.snippets[i]
+                hold_dur = max(snippet.audio_duration, self.hold_duration)
+                sub_start_time += self.snippet_duration + hold_dur
+            
+            # Sub-image audio
+            audio_path = sub_img.get('audio_path')
+            if audio_path and os.path.exists(audio_path):
+                audio_input_count += 1
+                audio_inputs.extend(['-i', audio_path])
+                delay_ms = int(sub_start_time * 1000)
+                label = f"sa{idx}"
+                audio_filters.append(f"[{audio_input_count}:a]adelay={delay_ms}|{delay_ms}[{label}]")
+                sub_image_audio_labels.append(f"[{label}]")
+        
+        # Second pass: collect all sub-image video inputs (after ALL audio inputs)
+        # These will be added after audio_inputs in the command
+        sub_image_input_start_idx = audio_input_count + 1  # Track where sub-image videos start
+        
+        for idx, sub_img in enumerate(self.sub_images):
+            # Recalculate timing (same as before)
+            after_snip_idx = sub_img.get('after_snip', 0)
+            sub_start_time = self.intro_duration
+            for i in range(min(after_snip_idx + 1, len(self.snippets))):
+                snippet = self.snippets[i]
+                hold_dur = max(snippet.audio_duration, self.hold_duration)
+                sub_start_time += self.snippet_duration + hold_dur
+            
+            persistent = sub_img.get('persistent', False)
+            sub_audio_dur = sub_img.get('audio_duration', 0.0)
+            if persistent:
+                sub_end_time = video_duration
+            else:
+                sub_end_time = sub_start_time + max(sub_audio_dur, 2.0)
+            
+            # Add sub-image file as input
+            img_path = sub_img.get('image_path', '')
+            if img_path and os.path.exists(img_path):
+                # Index is: all audio inputs + 1 (for main image) + position in sub_image_inputs
+                img_input_idx = sub_image_input_start_idx + len(sub_image_inputs) // 2  # -i counts as 2 elements
+                sub_image_inputs.extend(['-i', img_path])
+                
+                # Get position (relative to source image, needs scaling)
+                pos = sub_img.get('position', (0, 0))
+                scale_x = self.output_width / self.image_width if self.image_width else 1
+                scale_y = self.output_height / self.image_height if self.image_height else 1
+                overlay_x = int(pos[0] * scale_x)
+                overlay_y = int(pos[1] * scale_y)
+                
+                sub_image_overlays.append({
+                    'input_idx': img_input_idx,
+                    'x': overlay_x,
+                    'y': overlay_y,
+                    'start': sub_start_time,
+                    'end': sub_end_time
+                })
             
         # Build zoompan filter
         zoompan_filter = (
@@ -437,22 +511,39 @@ class KenBurnsGenerator:
         # Audio Inputs
         cmd.extend(audio_inputs)
         
+        # Sub-image inputs (after audio inputs)
+        cmd.extend(sub_image_inputs)
+        
         # Complex Filter Network
         filter_complex = []
         
-        # Video Graph
-        # [0:v]filters...[v]
-        # Actually zoompan works on input 0.
-        # But we need to be careful if we map it. 
-        # Simpler: just use -vf if no other video inputs.
-        # But we are using -filter_complex for audio. So we should use it for video too to be safe.
-        filter_complex.append(f"[0:v]{full_vf}[outv]")
+        # Video Graph - start with zoompan on input 0
+        video_label = "outv"
         
-        # Audio Graph
-        if mixed_audio_labels:
+        if sub_image_overlays:
+            # Chain overlay filters: [0:v]zoompan[zp];[zp][1:v]overlay...[ov1];[ov1][2:v]overlay...[outv]
+            filter_complex.append(f"[0:v]{full_vf}[zp]")
+            
+            prev_label = "zp"
+            for i, ov in enumerate(sub_image_overlays):
+                next_label = f"ov{i}" if i < len(sub_image_overlays) - 1 else video_label
+                # Scale sub-image to reasonable size and overlay with enable timing
+                overlay_filter = (
+                    f"[{ov['input_idx']}:v]scale=150:-1[si{i}];"
+                    f"[{prev_label}][si{i}]overlay=x={ov['x']}:y={ov['y']}:"
+                    f"enable='between(t,{ov['start']:.2f},{ov['end']:.2f})'[{next_label}]"
+                )
+                filter_complex.append(overlay_filter)
+                prev_label = next_label
+        else:
+            filter_complex.append(f"[0:v]{full_vf}[{video_label}]")
+        
+        # Audio Graph - combine snippet audio and sub-image audio
+        all_audio_labels = mixed_audio_labels + sub_image_audio_labels
+        
+        if all_audio_labels:
             # Mix all delayed audio streams
-            # amix inputs=N:duration=longest
-            amix_cmd = f"{''.join(mixed_audio_labels)}amix=inputs={len(mixed_audio_labels)}:duration=longest[outa]"
+            amix_cmd = f"{''.join(all_audio_labels)}amix=inputs={len(all_audio_labels)}:duration=longest[outa]"
             filter_complex.extend(audio_filters)
             filter_complex.append(amix_cmd)
             has_audio = True
@@ -462,7 +553,7 @@ class KenBurnsGenerator:
         cmd.extend(['-filter_complex', ";".join(filter_complex)])
         
         # Map outputs
-        cmd.extend(['-map', '[outv]'])
+        cmd.extend(['-map', f'[{video_label}]'])
         if has_audio:
             cmd.extend(['-map', '[outa]'])
             
@@ -528,7 +619,8 @@ def generate_video_from_snippets(
     aspect_ratio: str = "9:16",
     show_boxes: bool = False,
     ken_burns: bool = True,
-    progress_callback=None
+    progress_callback=None,
+    sub_images: List[dict] = None
 ) -> Tuple[bool, str]:
     """
     Convenience function to generate a Ken Burns video.
@@ -541,6 +633,7 @@ def generate_video_from_snippets(
         show_boxes: Whether to show box overlay around snippets
         ken_burns: Whether to use Ken Burns animation (True) or instant cuts (False)
         progress_callback: Optional callback for progress
+        sub_images: List of sub-image overlay dicts
     
     Returns:
         Tuple of (success, message)
@@ -563,7 +656,9 @@ def generate_video_from_snippets(
                 'x': rect.x(),
                 'y': rect.y(),
                 'width': rect.width(),
-                'height': rect.height()
+                'height': rect.height(),
+                'audio_path': s.get('audio_path'),
+                'audio_duration': s.get('audio_duration', 0.0)
             })
         elif 'w' in s:
             # Already in dict format with w/h
@@ -571,7 +666,9 @@ def generate_video_from_snippets(
                 'x': s['x'],
                 'y': s['y'],
                 'width': s['w'],
-                'height': s['h']
+                'height': s['h'],
+                'audio_path': s.get('audio_path'),
+                'audio_duration': s.get('audio_duration', 0.0)
             })
         else:
             normalized_snippets.append(s)
@@ -582,7 +679,9 @@ def generate_video_from_snippets(
         output_width=width,
         output_height=height,
         show_boxes=show_boxes,
-        ken_burns=ken_burns
+        ken_burns=ken_burns,
+        sub_images=sub_images or []
     )
     
     return generator.generate(output_path, progress_callback)
+

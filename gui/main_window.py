@@ -17,7 +17,7 @@ class VideoGeneratorWorker(QThread):
     finished = pyqtSignal(bool, str)
     progress = pyqtSignal(str)
     
-    def __init__(self, image_path, snippets, output_path, aspect_ratio, tts_handler, voice="en-US-AriaNeural", show_boxes=False, ken_burns=True):
+    def __init__(self, image_path, snippets, output_path, aspect_ratio, tts_handler, voice="en-US-AriaNeural", show_boxes=False, ken_burns=True, sub_images=None):
         super().__init__()
         self.image_path = image_path
         self.snippets = snippets
@@ -27,10 +27,11 @@ class VideoGeneratorWorker(QThread):
         self.voice = voice
         self.show_boxes = show_boxes
         self.ken_burns = ken_burns
+        self.sub_images = sub_images or []
     
     def run(self):
-        # Step 1: Generate Audio
-        self.progress.emit("Step 1/2: Generating Audio...")
+        # Step 1: Generate Audio for snippets
+        self.progress.emit("Step 1/3: Generating Snippet Audio...")
         
         # Audio directory
         audio_dir = os.path.join(os.path.dirname(self.output_path), "temp_audio")
@@ -57,9 +58,37 @@ class VideoGeneratorWorker(QThread):
             else:
                 snippets_with_audio[i]['audio_path'] = None
                 snippets_with_audio[i]['audio_duration'] = 0.0
+        
+        # Step 2: Generate Audio for sub-images
+        sub_images_with_audio = []
+        if self.sub_images:
+            self.progress.emit("Step 2/3: Generating Sub-Image Audio...")
+            for i, sub_img in enumerate(self.sub_images):
+                sub_img_copy = sub_img.copy()
+                text = sub_img.get('text', '').strip()
+                
+                if text:
+                    self.progress.emit(f"Generating audio for {sub_img['id']}...")
+                    audio_filename = f"subimg_{i}_{datetime.now().strftime('%H%M%S')}.mp3"
+                    audio_path = os.path.join(audio_dir, audio_filename)
+                    
+                    success, duration = self.tts_handler.generate_audio(text, self.voice, audio_path)
+                    
+                    if success:
+                        sub_img_copy['audio_path'] = audio_path
+                        sub_img_copy['audio_duration'] = duration
+                    else:
+                        self.progress.emit(f"Failed to generate audio for {sub_img['id']}")
+                        sub_img_copy['audio_path'] = None
+                        sub_img_copy['audio_duration'] = 0.0
+                else:
+                    sub_img_copy['audio_path'] = None
+                    sub_img_copy['audio_duration'] = 0.0
+                
+                sub_images_with_audio.append(sub_img_copy)
 
-        # Step 2: Generate Video
-        self.progress.emit("Step 2/2: Generating Video...")
+        # Step 3: Generate Video
+        self.progress.emit("Step 3/3: Generating Video...")
         success, message = generate_video_from_snippets(
             self.image_path,
             snippets_with_audio,
@@ -67,7 +96,8 @@ class VideoGeneratorWorker(QThread):
             self.aspect_ratio,
             self.show_boxes,
             self.ken_burns,
-            progress_callback=lambda msg: self.progress.emit(msg)
+            progress_callback=lambda msg: self.progress.emit(msg),
+            sub_images=sub_images_with_audio
         )
         
         # Cleanup temp audio
@@ -88,6 +118,9 @@ class MainWindow(QMainWindow):
         self.snippet_widgets = []  # replacing self.snippet_buttons
         self.pending_snippets = []  # Queue of imported but unassigned snippets
         self.selected_pending_idx = None  # Currently selected pending snippet awaiting region
+        self.sub_images = []  # List of overlay sub-images
+        self.sub_image_mode = False  # True when positioning a sub-image
+        self.current_sub_image = None  # Currently being placed sub-image
         
         # Ensure uploads dir
         self.uploads_dir = os.path.join(os.getcwd(), 'uploads')
@@ -153,6 +186,33 @@ class MainWindow(QMainWindow):
         btn_row.addWidget(self.btn_snip)
         
         center_layout.addLayout(btn_row)
+        
+        # Sub-Image Controls Row
+        sub_image_row = QHBoxLayout()
+        
+        self.btn_add_subimage = QPushButton("🖼 Add Sub-Image")
+        self.btn_add_subimage.setStyleSheet("""
+            QPushButton {
+                background-color: #2e7d32; color: white; padding: 8px; border-radius: 4px; border: 1px solid #1b5e20;
+            }
+            QPushButton:hover { background-color: #388e3c; }
+        """)
+        self.btn_add_subimage.clicked.connect(self.add_sub_image)
+        sub_image_row.addWidget(self.btn_add_subimage)
+        
+        self.btn_place_subimage = QPushButton("📍 Place Sub-Image")
+        self.btn_place_subimage.setStyleSheet("""
+            QPushButton {
+                background-color: #1565c0; color: white; padding: 8px; border-radius: 4px; border: 1px solid #0d47a1;
+            }
+            QPushButton:hover { background-color: #1976d2; }
+            QPushButton:disabled { background-color: #555; color: #888; }
+        """)
+        self.btn_place_subimage.setEnabled(False)
+        self.btn_place_subimage.clicked.connect(self.place_sub_image)
+        sub_image_row.addWidget(self.btn_place_subimage)
+        
+        center_layout.addLayout(sub_image_row)
 
 
         # Zoom Controls
@@ -569,6 +629,96 @@ class MainWindow(QMainWindow):
             widget.deleteLater()
         self.snippet_widgets.clear()
 
+    def add_sub_image(self):
+        """Open file dialog to add a sub-image overlay."""
+        if not self.current_image_path:
+            self.log_panel.log("Error: Please upload a main image first.")
+            QMessageBox.warning(self, "No Image", "Please upload a main image first.")
+            return
+        
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, 
+            "Select Sub-Image", 
+            "", 
+            "Images (*.png *.jpg *.jpeg *.gif *.bmp)"
+        )
+        if file_path:
+            # Create sub-image data
+            sub_image_id = f"sub-image-{len(self.sub_images) + 1}"
+            self.current_sub_image = {
+                'id': sub_image_id,
+                'image_path': file_path,
+                'position': (50, 50),  # Default position
+                'size': None,  # Will be set from actual image
+                'after_snip': len(self.canvas.snippets) - 1 if self.canvas.snippets else 0,
+                'text': '',
+                'audio_path': None,
+                'audio_duration': 0.0,
+                'persistent': False
+            }
+            
+            # Enable sub-image mode on canvas
+            self.sub_image_mode = True
+            self.canvas.set_sub_image(file_path)
+            self.btn_place_subimage.setEnabled(True)
+            self.btn_snip.setEnabled(False)  # Disable snip while placing
+            
+            self.log_panel.log(f"Loaded {sub_image_id}. Drag to position, then click 'Place Sub-Image'.")
+    
+    def place_sub_image(self):
+        """Capture current sub-image position and add to list."""
+        if not self.current_sub_image or not self.sub_image_mode:
+            return
+        
+        # Get position from canvas
+        pos = self.canvas.get_sub_image_position()
+        if pos:
+            self.current_sub_image['position'] = pos
+            self.current_sub_image['size'] = self.canvas.get_sub_image_size()
+            
+            # Add to sub_images list
+            self.sub_images.append(self.current_sub_image)
+            
+            # Create SubImageWidget in storyboard
+            self._create_sub_image_widget(self.current_sub_image)
+            
+            self.log_panel.log(f"Placed {self.current_sub_image['id']} at position {pos}")
+            
+            # Reset state
+            self.current_sub_image = None
+            self.sub_image_mode = False
+            self.canvas.clear_sub_image()
+            self.btn_place_subimage.setEnabled(False)
+            self.btn_snip.setEnabled(True)
+    
+    def _create_sub_image_widget(self, sub_image):
+        """Create a widget for the sub-image in the storyboard."""
+        from gui.custom_widgets import SubImageWidget
+        
+        widget = SubImageWidget(
+            sub_image['id'],
+            sub_image['image_path'],
+            len(self.canvas.snippets),  # Total snips for dropdown
+            sub_image['after_snip']
+        )
+        widget.deleted.connect(lambda sid=sub_image['id']: self._delete_sub_image(sid))
+        widget.settings_changed.connect(self._on_sub_image_settings_changed)
+        
+        self.snippets_layout.addWidget(widget)
+        self.log_panel.log(f"Added {sub_image['id']} to storyboard")
+    
+    def _delete_sub_image(self, sub_image_id):
+        """Delete a sub-image by ID."""
+        self.sub_images = [s for s in self.sub_images if s['id'] != sub_image_id]
+        self.log_panel.log(f"Deleted {sub_image_id}")
+    
+    def _on_sub_image_settings_changed(self, sub_image_id, settings):
+        """Handle sub-image settings changes from widget."""
+        for sub_img in self.sub_images:
+            if sub_img['id'] == sub_image_id:
+                sub_img.update(settings)
+                break
+
     def toggle_snip_mode(self):
         """Toggle snip mode on the canvas."""
         enabled = self.btn_snip.isChecked()
@@ -725,7 +875,8 @@ class MainWindow(QMainWindow):
             self.tts_handler,
             voice,
             show_boxes,
-            ken_burns
+            ken_burns,
+            self.sub_images  # Pass sub-images
         )
         self.video_worker.progress.connect(self.on_video_progress)
         self.video_worker.finished.connect(self.on_video_finished)

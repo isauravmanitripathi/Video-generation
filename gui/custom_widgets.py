@@ -77,6 +77,13 @@ class ImageCanvas(QWidget):
             QColor("#98D8C8"), QColor("#F7DC6F"), QColor("#BB8FCE")
         ]
         
+        # Sub-image overlay state
+        self.sub_image_pixmap = None  # QPixmap of overlay image
+        self.sub_image_pos = QPoint(50, 50)  # Position on canvas (screen coords)
+        self.sub_image_source_pos = (0, 0)  # Position on source image
+        self.sub_image_dragging = False  # True when dragging sub-image
+        self.sub_image_size = None  # (width, height) of sub-image
+        
         # Determine aspect ratio float
         if "9:16" in ratio_name:
             self.aspect_ratio = 9/16
@@ -330,6 +337,29 @@ class ImageCanvas(QWidget):
                 painter.setPen(pen)
                 painter.drawRect(self.current_snippet_rect)
             
+            # Draw sub-image overlay if active
+            if self.sub_image_pixmap:
+                # Draw semi-transparent background
+                painter.setOpacity(0.9)
+                painter.drawPixmap(self.sub_image_pos, self.sub_image_pixmap)
+                painter.setOpacity(1.0)
+                
+                # Draw border around sub-image
+                sub_rect = QRect(
+                    self.sub_image_pos.x(),
+                    self.sub_image_pos.y(),
+                    self.sub_image_pixmap.width(),
+                    self.sub_image_pixmap.height()
+                )
+                pen = QPen(QColor("#2ecc71"), 3, Qt.DashLine)
+                painter.setPen(pen)
+                painter.setBrush(Qt.NoBrush)
+                painter.drawRect(sub_rect)
+                
+                # Draw drag handle hint
+                painter.setPen(QColor("#fff"))
+                painter.drawText(sub_rect.center().x() - 30, sub_rect.bottom() + 15, "Drag to position")
+            
             painter.restore()
         
         # 5. Draw Viewport Border
@@ -340,6 +370,20 @@ class ImageCanvas(QWidget):
     def mousePressEvent(self, event):
         if not self.source_pixmap or not self.viewport_rect.contains(event.pos()):
             return
+        
+        # Check if clicking on sub-image overlay for dragging
+        if self.sub_image_pixmap:
+            sub_rect = QRect(
+                self.sub_image_pos.x(),
+                self.sub_image_pos.y(),
+                self.sub_image_pixmap.width(),
+                self.sub_image_pixmap.height()
+            )
+            if sub_rect.contains(event.pos()):
+                self.sub_image_dragging = True
+                self.last_mouse_pos = event.pos()
+                self.setCursor(Qt.SizeAllCursor)
+                return
             
         if self.snip_mode:
             # Start drawing snippet
@@ -353,6 +397,14 @@ class ImageCanvas(QWidget):
             self.setCursor(Qt.ClosedHandCursor)
             
     def mouseMoveEvent(self, event):
+        # Handle sub-image dragging first
+        if self.sub_image_dragging and self.sub_image_pixmap:
+            delta = event.pos() - self.last_mouse_pos
+            self.sub_image_pos += delta
+            self.last_mouse_pos = event.pos()
+            self.update()
+            return
+        
         if self.snip_mode and self.snippet_start_pos:
             # Update snippet rectangle
             self.current_snippet_rect = QRect(
@@ -419,6 +471,10 @@ class ImageCanvas(QWidget):
             self.update()
         elif self.is_dragging:
             self.is_dragging = False
+        
+        # Reset sub-image dragging
+        if self.sub_image_dragging:
+            self.sub_image_dragging = False
             
         self.setCursor(Qt.CrossCursor if self.snip_mode else Qt.ArrowCursor)
 
@@ -520,6 +576,56 @@ class ImageCanvas(QWidget):
         screen_h = int(source_rect.height() * self.scale_factor)
         
         return QRect(screen_x, screen_y, screen_w, screen_h)
+    
+    def set_sub_image(self, image_path):
+        """Load and display a sub-image overlay for positioning."""
+        pixmap = QPixmap(image_path)
+        if pixmap.isNull():
+            return
+        
+        # Scale down if too large (max 200px on longest side for overlay)
+        max_size = 200
+        if pixmap.width() > max_size or pixmap.height() > max_size:
+            pixmap = pixmap.scaled(max_size, max_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        
+        self.sub_image_pixmap = pixmap
+        self.sub_image_size = (pixmap.width(), pixmap.height())
+        self.sub_image_pos = QPoint(
+            self.viewport_rect.x() + 50,
+            self.viewport_rect.y() + 50
+        )
+        self.update()
+    
+    def clear_sub_image(self):
+        """Remove the sub-image overlay."""
+        self.sub_image_pixmap = None
+        self.sub_image_size = None
+        self.sub_image_dragging = False
+        self.update()
+    
+    def get_sub_image_position(self):
+        """Get sub-image position in source image coordinates."""
+        if not self.sub_image_pixmap or not self.source_pixmap:
+            return None
+        
+        # Convert screen position to source image coordinates
+        dw = int(self.source_pixmap.width() * self.scale_factor)
+        dh = int(self.source_pixmap.height() * self.scale_factor)
+        
+        vp_cx = self.viewport_rect.width() / 2
+        vp_cy = self.viewport_rect.height() / 2
+        
+        img_x = vp_cx - (dw / 2) + self.image_pos.x() + self.viewport_rect.x()
+        img_y = vp_cy - (dh / 2) + self.image_pos.y() + self.viewport_rect.y()
+        
+        source_x = int((self.sub_image_pos.x() - img_x) / self.scale_factor)
+        source_y = int((self.sub_image_pos.y() - img_y) / self.scale_factor)
+        
+        return (source_x, source_y)
+    
+    def get_sub_image_size(self):
+        """Get sub-image display size."""
+        return self.sub_image_size
 
 
 class SnippetItemWidget(QWidget):
@@ -716,3 +822,81 @@ class SnippetItemWidget(QWidget):
             self.lbl_title.setStyleSheet("font-size: 13px; font-weight: bold; color: #fff;")
 
 
+
+class SubImageWidget(QWidget):
+    """Widget for sub-image overlay in storyboard."""
+    deleted = pyqtSignal(str)
+    settings_changed = pyqtSignal(str, dict)
+    
+    def __init__(self, sub_image_id, image_path, total_snips, after_snip):
+        super().__init__()
+        self.sub_image_id = sub_image_id
+        
+        self.setStyleSheet("""
+            SubImageWidget {
+                background-color: #2a3a2a;
+                border-radius: 8px;
+                border: 1px solid #4caf50;
+            }
+        """)
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(6)
+        
+        # Header
+        header = QHBoxLayout()
+        
+        thumb = QLabel()
+        pixmap = QPixmap(image_path)
+        if not pixmap.isNull():
+            pixmap = pixmap.scaled(36, 36, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            thumb.setPixmap(pixmap)
+        thumb.setFixedSize(36, 36)
+        header.addWidget(thumb)
+        
+        self.lbl_title = QLabel(f"�� {sub_image_id}")
+        self.lbl_title.setStyleSheet("font-size: 12px; font-weight: bold; color: #4caf50;")
+        header.addWidget(self.lbl_title, 1)
+        
+        btn_del = QPushButton("×")
+        btn_del.setFixedSize(26, 26)
+        btn_del.setStyleSheet("QPushButton { background: transparent; color: #888; border: 1px solid #444; border-radius: 4px; } QPushButton:hover { background: #d32f2f; color: white; }")
+        btn_del.clicked.connect(lambda: self.deleted.emit(self.sub_image_id))
+        header.addWidget(btn_del)
+        
+        layout.addLayout(header)
+        
+        # After snip combo
+        from PyQt5.QtWidgets import QComboBox, QCheckBox
+        row = QHBoxLayout()
+        row.addWidget(QLabel("After:"))
+        self.combo = QComboBox()
+        self.combo.setStyleSheet("QComboBox { background: #333; color: white; border: 1px solid #555; padding: 3px; border-radius: 3px; }")
+        for i in range(max(1, total_snips)):
+            self.combo.addItem(f"Snip {i+1}", i)
+        self.combo.setCurrentIndex(min(after_snip, self.combo.count()-1))
+        self.combo.currentIndexChanged.connect(self._emit)
+        row.addWidget(self.combo, 1)
+        layout.addLayout(row)
+        
+        # Persistent checkbox
+        self.chk = QCheckBox("Keep until video ends")
+        self.chk.setStyleSheet("color: #aaa; font-size: 11px;")
+        self.chk.stateChanged.connect(self._emit)
+        layout.addWidget(self.chk)
+        
+        # Script
+        self.txt = QTextEdit()
+        self.txt.setPlaceholderText("Voice script...")
+        self.txt.setMaximumHeight(50)
+        self.txt.setStyleSheet("QTextEdit { background: #1e1e1e; color: #ddd; border: 1px solid #444; border-radius: 4px; padding: 5px; font-size: 11px; }")
+        self.txt.textChanged.connect(self._emit)
+        layout.addWidget(self.txt)
+    
+    def _emit(self):
+        self.settings_changed.emit(self.sub_image_id, {
+            'after_snip': self.combo.currentData(),
+            'persistent': self.chk.isChecked(),
+            'text': self.txt.toPlainText()
+        })
