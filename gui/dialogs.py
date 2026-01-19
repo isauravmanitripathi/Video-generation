@@ -140,6 +140,21 @@ class VideoOptionsDialog(QDialog):
         
         # === Option Rows ===
         
+        # Zoom to Snippets (NEW)
+        self.zoom_row = OptionRow(
+            "Zoom to Snippets",
+            "Camera zooms in to each snippet. Turn OFF to show full image.",
+            default_on=True
+        )
+        options_layout.addWidget(self.zoom_row)
+        
+        # Divider
+        divider0 = QFrame()
+        divider0.setFrameShape(QFrame.HLine)
+        divider0.setStyleSheet("background-color: #444; margin: 0 15px;")
+        divider0.setFixedHeight(1)
+        options_layout.addWidget(divider0)
+        
         # Ken Burns Effect
         self.ken_burns_row = OptionRow(
             "Ken Burns Effect",
@@ -164,6 +179,21 @@ class VideoOptionsDialog(QDialog):
         options_layout.addWidget(self.box_overlay_row)
         
         layout.addWidget(options_container)
+        
+        # Info label for when zoom is off
+        self.info_label = QLabel()
+        self.info_label.setStyleSheet("""
+            color: #888;
+            font-size: 11px;
+            padding: 10px 15px;
+            background-color: #2b2b2b;
+        """)
+        self.info_label.setWordWrap(True)
+        self.info_label.hide()
+        layout.addWidget(self.info_label)
+        
+        # Connect zoom toggle to update other options
+        self.zoom_row.toggle.mousePressEvent = self._on_zoom_toggle
         
         # Buttons
         btn_container = QWidget()
@@ -208,10 +238,36 @@ class VideoOptionsDialog(QDialog):
         
         layout.addWidget(btn_container)
     
+    def _on_zoom_toggle(self, event):
+        """Handle zoom toggle - disable Ken Burns when zoom is off."""
+        # Call original toggle behavior
+        toggle = self.zoom_row.toggle
+        toggle._checked = not toggle._checked
+        end_pos = 27 if toggle._checked else 3
+        toggle._animation.stop()
+        toggle._animation.setStartValue(toggle._circle_position)
+        toggle._animation.setEndValue(end_pos)
+        toggle._animation.start()
+        
+        # If zoom is turned off, disable Ken Burns and show info
+        if not toggle._checked:
+            self.ken_burns_row.toggle.setChecked(False)
+            self.ken_burns_row.setEnabled(False)
+            self.box_overlay_row.toggle.setChecked(True)
+            self.info_label.setText("ℹ️ Zoom OFF: Full image shown with box overlays. Sub-images will appear/disappear at their positions.")
+            self.info_label.show()
+        else:
+            self.ken_burns_row.setEnabled(True)
+            self.info_label.hide()
+    
     def get_options(self):
         """Return dictionary of all selected options."""
+        use_zoom = self.zoom_row.is_checked()
+        ken_burns = self.ken_burns_row.is_checked() if use_zoom else False
+        
         return {
-            'ken_burns': self.ken_burns_row.is_checked(),
+            'use_zoom': use_zoom,
+            'ken_burns': ken_burns,
             'show_boxes': self.box_overlay_row.is_checked()
         }
 
