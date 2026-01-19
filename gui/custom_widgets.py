@@ -78,11 +78,16 @@ class ImageCanvas(QWidget):
         ]
         
         # Sub-image overlay state
-        self.sub_image_pixmap = None  # QPixmap of overlay image
+        self.sub_image_pixmap = None  # QPixmap of overlay image (original)
+        self.sub_image_original_pixmap = None  # Original pixmap for scaling
         self.sub_image_pos = QPoint(50, 50)  # Position on canvas (screen coords)
         self.sub_image_source_pos = (0, 0)  # Position on source image
         self.sub_image_dragging = False  # True when dragging sub-image
-        self.sub_image_size = None  # (width, height) of sub-image
+        self.sub_image_resizing = False  # True when resizing sub-image
+        self.sub_image_resize_handle = None  # Which handle is being dragged
+        self.sub_image_size = None  # (width, height) of sub-image on canvas
+        self.sub_image_scale = 1.0  # Scale factor for sub-image
+        self.resize_handle_size = 12  # Size of resize handles in pixels
         
         # Determine aspect ratio float
         if "9:16" in ratio_name:
@@ -356,9 +361,19 @@ class ImageCanvas(QWidget):
                 painter.setBrush(Qt.NoBrush)
                 painter.drawRect(sub_rect)
                 
-                # Draw drag handle hint
+                # Draw resize handles at corners
+                handle_size = self.resize_handle_size
+                handles = self._get_sub_image_resize_handles()
+                painter.setBrush(QColor("#2ecc71"))
+                painter.setPen(QPen(QColor("#fff"), 2))
+                for handle_name, handle_rect in handles.items():
+                    painter.drawRect(handle_rect)
+                
+                # Draw size info
                 painter.setPen(QColor("#fff"))
-                painter.drawText(sub_rect.center().x() - 30, sub_rect.bottom() + 15, "Drag to position")
+                size_text = f"{self.sub_image_size[0]}x{self.sub_image_size[1]} (Scale: {self.sub_image_scale:.1f}x)"
+                painter.drawText(sub_rect.center().x() - 60, sub_rect.bottom() + 15, size_text)
+                painter.drawText(sub_rect.center().x() - 40, sub_rect.bottom() + 30, "Drag corners to resize")
             
             painter.restore()
         
@@ -371,8 +386,17 @@ class ImageCanvas(QWidget):
         if not self.source_pixmap or not self.viewport_rect.contains(event.pos()):
             return
         
-        # Check if clicking on sub-image overlay for dragging
+        # Check if clicking on sub-image resize handles first
         if self.sub_image_pixmap:
+            handle = self._get_resize_handle_at_pos(event.pos())
+            if handle:
+                self.sub_image_resizing = True
+                self.sub_image_resize_handle = handle
+                self.last_mouse_pos = event.pos()
+                self.setCursor(Qt.SizeFDiagCursor)
+                return
+            
+            # Check if clicking on sub-image body for dragging
             sub_rect = QRect(
                 self.sub_image_pos.x(),
                 self.sub_image_pos.y(),
@@ -397,11 +421,54 @@ class ImageCanvas(QWidget):
             self.setCursor(Qt.ClosedHandCursor)
             
     def mouseMoveEvent(self, event):
-        # Handle sub-image dragging first
+        # Handle sub-image resizing first
+        if self.sub_image_resizing and self.sub_image_pixmap:
+            delta = event.pos() - self.last_mouse_pos
+            
+            # Get current size
+            current_w = self.sub_image_pixmap.width()
+            current_h = self.sub_image_pixmap.height()
+            
+            # Calculate new size based on which handle is being dragged
+            handle = self.sub_image_resize_handle
+            if handle == 'bottom_right':
+                new_w = current_w + delta.x()
+                new_h = current_h + delta.y()
+            elif handle == 'top_left':
+                new_w = current_w - delta.x()
+                new_h = current_h - delta.y()
+                # Also move position
+                self.sub_image_pos += QPoint(delta.x(), delta.y())
+            elif handle == 'top_right':
+                new_w = current_w + delta.x()
+                new_h = current_h - delta.y()
+                self.sub_image_pos += QPoint(0, delta.y())
+            elif handle == 'bottom_left':
+                new_w = current_w - delta.x()
+                new_h = current_h + delta.y()
+                self.sub_image_pos += QPoint(delta.x(), 0)
+            else:
+                new_w, new_h = current_w, current_h
+            
+            self._resize_sub_image(new_w, new_h)
+            self.last_mouse_pos = event.pos()
+            
+            # Log current size
+            pos = self.get_sub_image_position()
+            if pos:
+                self.log_signal.emit(f"Sub-image: {self.sub_image_size[0]}x{self.sub_image_size[1]} at ({pos[0]}, {pos[1]})")
+            return
+        
+        # Handle sub-image dragging
         if self.sub_image_dragging and self.sub_image_pixmap:
             delta = event.pos() - self.last_mouse_pos
             self.sub_image_pos += delta
             self.last_mouse_pos = event.pos()
+            
+            # Log position
+            pos = self.get_sub_image_position()
+            if pos:
+                self.log_signal.emit(f"Sub-image position: ({pos[0]}, {pos[1]})")
             self.update()
             return
         
@@ -475,6 +542,11 @@ class ImageCanvas(QWidget):
         # Reset sub-image dragging
         if self.sub_image_dragging:
             self.sub_image_dragging = False
+        
+        # Reset sub-image resizing
+        if self.sub_image_resizing:
+            self.sub_image_resizing = False
+            self.sub_image_resize_handle = None
             
         self.setCursor(Qt.CrossCursor if self.snip_mode else Qt.ArrowCursor)
 
@@ -577,30 +649,87 @@ class ImageCanvas(QWidget):
         
         return QRect(screen_x, screen_y, screen_w, screen_h)
     
+    def _get_sub_image_resize_handles(self):
+        """Get rectangles for resize handles at corners of sub-image."""
+        if not self.sub_image_pixmap:
+            return {}
+        
+        hs = self.resize_handle_size
+        x = self.sub_image_pos.x()
+        y = self.sub_image_pos.y()
+        w = self.sub_image_pixmap.width()
+        h = self.sub_image_pixmap.height()
+        
+        return {
+            'top_left': QRect(x - hs//2, y - hs//2, hs, hs),
+            'top_right': QRect(x + w - hs//2, y - hs//2, hs, hs),
+            'bottom_left': QRect(x - hs//2, y + h - hs//2, hs, hs),
+            'bottom_right': QRect(x + w - hs//2, y + h - hs//2, hs, hs),
+        }
+    
+    def _get_resize_handle_at_pos(self, pos):
+        """Check if position is on a resize handle, return handle name or None."""
+        handles = self._get_sub_image_resize_handles()
+        for name, rect in handles.items():
+            if rect.contains(pos):
+                return name
+        return None
+    
+    def _resize_sub_image(self, new_width, new_height):
+        """Resize the sub-image to new dimensions."""
+        if not self.sub_image_original_pixmap:
+            return
+        
+        # Minimum size
+        new_width = max(30, new_width)
+        new_height = max(30, new_height)
+        
+        # Scale from original
+        self.sub_image_pixmap = self.sub_image_original_pixmap.scaled(
+            new_width, new_height,
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation
+        )
+        self.sub_image_size = (self.sub_image_pixmap.width(), self.sub_image_pixmap.height())
+        self.sub_image_scale = self.sub_image_pixmap.width() / self.sub_image_original_pixmap.width()
+        self.update()
+    
     def set_sub_image(self, image_path):
-        """Load and display a sub-image overlay for positioning."""
+        """Load and display a sub-image overlay for positioning and resizing."""
         pixmap = QPixmap(image_path)
         if pixmap.isNull():
             return
         
-        # Scale down if too large (max 200px on longest side for overlay)
+        # Store original for scaling
+        self.sub_image_original_pixmap = pixmap
+        
+        # Initial scale - fit within 200px but allow resize
         max_size = 200
         if pixmap.width() > max_size or pixmap.height() > max_size:
             pixmap = pixmap.scaled(max_size, max_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         
         self.sub_image_pixmap = pixmap
         self.sub_image_size = (pixmap.width(), pixmap.height())
+        self.sub_image_scale = pixmap.width() / self.sub_image_original_pixmap.width()
         self.sub_image_pos = QPoint(
             self.viewport_rect.x() + 50,
             self.viewport_rect.y() + 50
         )
+        self.sub_image_resizing = False
+        self.sub_image_resize_handle = None
+        
+        self.log_signal.emit(f"Sub-image loaded: {self.sub_image_original_pixmap.width()}x{self.sub_image_original_pixmap.height()} (drag corners to resize)")
         self.update()
     
     def clear_sub_image(self):
         """Remove the sub-image overlay."""
         self.sub_image_pixmap = None
+        self.sub_image_original_pixmap = None
         self.sub_image_size = None
+        self.sub_image_scale = 1.0
         self.sub_image_dragging = False
+        self.sub_image_resizing = False
+        self.sub_image_resize_handle = None
         self.update()
     
     def get_sub_image_position(self):
@@ -624,8 +753,32 @@ class ImageCanvas(QWidget):
         return (source_x, source_y)
     
     def get_sub_image_size(self):
-        """Get sub-image display size."""
-        return self.sub_image_size
+        """Get sub-image display size in source coordinates."""
+        if not self.sub_image_size or not self.source_pixmap:
+            return None
+        
+        # Convert screen size to source image size
+        source_w = int(self.sub_image_size[0] / self.scale_factor)
+        source_h = int(self.sub_image_size[1] / self.scale_factor)
+        
+        return (source_w, source_h)
+    
+    def get_sub_image_source_size(self):
+        """
+        Get the size of sub-image for compositing onto source image.
+        This converts the screen-displayed size to source image pixels.
+        """
+        if not self.sub_image_size or not self.source_pixmap:
+            return None
+        
+        # The sub_image_size is in screen pixels
+        # We need to convert to source image pixels for compositing
+        source_w = int(self.sub_image_size[0] / self.scale_factor)
+        source_h = int(self.sub_image_size[1] / self.scale_factor)
+        
+        self.log_signal.emit(f"Sub-image source size: {source_w}x{source_h} (screen: {self.sub_image_size[0]}x{self.sub_image_size[1]}, scale: {self.scale_factor:.3f})")
+        
+        return (source_w, source_h)
 
 
 class SnippetItemWidget(QWidget):

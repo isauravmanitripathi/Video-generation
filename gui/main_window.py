@@ -672,9 +672,11 @@ class MainWindow(QMainWindow):
         
         # Get position from canvas
         pos = self.canvas.get_sub_image_position()
-        if pos:
+        size = self.canvas.get_sub_image_source_size()  # Get actual pixel size for compositing
+        
+        if pos and size:
             self.current_sub_image['position'] = pos
-            self.current_sub_image['size'] = self.canvas.get_sub_image_size()
+            self.current_sub_image['size'] = size  # Size in pixels for compositing
             
             # Add to sub_images list
             self.sub_images.append(self.current_sub_image)
@@ -682,7 +684,7 @@ class MainWindow(QMainWindow):
             # Create SubImageWidget in storyboard
             self._create_sub_image_widget(self.current_sub_image)
             
-            self.log_panel.log(f"Placed {self.current_sub_image['id']} at position {pos}")
+            self.log_panel.log(f"Placed {self.current_sub_image['id']} at ({pos[0]}, {pos[1]}) size {size[0]}x{size[1]}")
             
             # Reset state
             self.current_sub_image = None

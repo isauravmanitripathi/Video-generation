@@ -12,8 +12,9 @@ from typing import List, Tuple, Optional, Callable
 from PIL import Image
 from moviepy import (
     VideoClip, CompositeVideoClip, AudioFileClip, 
-    CompositeAudioClip, concatenate_audioclips
+    CompositeAudioClip
 )
+from generation.sub_image_handler import SubImageProcessor
 
 
 @dataclass
@@ -28,25 +29,12 @@ class Snippet:
     audio_duration: float = 0.0
 
 
-@dataclass 
-class SubImageTarget:
-    """Represents a sub-image overlay that acts as a camera target."""
-    x: int  # Position on source image
-    y: int
-    width: int
-    height: int
-    pil_image: Image.Image  # The overlay image
-    audio_path: Optional[str] = None
-    audio_duration: float = 0.0
-
-
 class KenBurnsGenerator:
     """
     Generates Ken Burns style videos from an image with snippet regions.
     
     The video smoothly animates from an overview to each snippet,
-    zooming in/out intelligently based on snippet size.
-    Sub-images are composited onto the source and treated as camera targets.
+    with sub-images appearing after their specified snippets.
     """
     
     def __init__(
@@ -104,184 +92,28 @@ class KenBurnsGenerator:
         self.original_image = Image.open(image_path).convert('RGBA')
         self.image_width, self.image_height = self.original_image.size
         
-        # Process sub-images: composite onto source AND create targets
-        self.sub_image_targets = []
-        self.source_image = self._composite_sub_images(sub_images or [])
+        # Process sub-images with the new handler
+        self.sub_image_processor = SubImageProcessor(self.original_image, sub_images or [])
         
-        # Calculate timeline (includes sub-image targets)
-        self.timeline = self._build_timeline()
-    
-    def _composite_sub_images(self, sub_images: List[dict]) -> Image.Image:
-        """
-        Composite sub-images onto the source image.
-        Also creates SubImageTarget objects for camera movement.
+        # Composite all sub-images onto source
+        self.source_image = self.sub_image_processor.composite_all()
         
-        Returns the composited image.
-        """
-        result = self.original_image.copy()
+        # Build timeline with sub-images interleaved after their respective snippets
+        self.timeline = self.sub_image_processor.build_interleaved_timeline(
+            snippets=self.snippets,
+            intro_duration=self.intro_duration,
+            snippet_duration=self.snippet_duration,
+            hold_duration=self.hold_duration,
+            outro_duration=self.outro_duration,
+            min_zoom=self.min_zoom,
+            max_zoom=self.max_zoom
+        )
         
-        for sub_img in sub_images:
-            img_path = sub_img.get('image_path', '')
-            if not img_path or not os.path.exists(img_path):
-                print(f"Sub-image not found: {img_path}")
-                continue
-            
-            try:
-                overlay = Image.open(img_path).convert('RGBA')
-                
-                # Get position in source coordinates
-                pos = sub_img.get('position', (0, 0))
-                x, y = int(pos[0]), int(pos[1])
-                
-                print(f"Compositing sub-image at ({x}, {y}), size: {overlay.size}")
-                
-                # Paste overlay onto result
-                result.paste(overlay, (x, y), overlay)
-                
-                # Create a target for camera movement
-                # The target area is the bounding box of the sub-image
-                target = SubImageTarget(
-                    x=x,
-                    y=y,
-                    width=overlay.width,
-                    height=overlay.height,
-                    pil_image=overlay,
-                    audio_path=sub_img.get('audio_path'),
-                    audio_duration=sub_img.get('audio_duration', 0.0)
-                )
-                self.sub_image_targets.append(target)
-                
-            except Exception as e:
-                print(f"Failed to composite sub-image {img_path}: {e}")
-        
-        return result
-    
-    def _calculate_zoom_for_region(self, width: int, height: int) -> float:
-        """
-        Calculate optimal zoom level to fit a region in viewport.
-        """
-        padding_factor = 0.6  # Show the sub-image with more context
-        
-        zoom_x = (self.image_width * padding_factor) / width
-        zoom_y = (self.image_height * padding_factor) / height
-        
-        zoom = min(zoom_x, zoom_y)
-        return max(self.min_zoom, min(self.max_zoom, zoom))
-    
-    def _calculate_zoom_for_snippet(self, snippet: Snippet) -> float:
-        """Calculate optimal zoom level to fit snippet in viewport."""
-        padding_factor = 0.8
-        
-        zoom_x = (self.image_width * padding_factor) / snippet.width
-        zoom_y = (self.image_height * padding_factor) / snippet.height
-        
-        zoom = min(zoom_x, zoom_y)
-        return max(self.min_zoom, min(self.max_zoom, zoom))
-    
-    def _build_timeline(self) -> List[dict]:
-        """
-        Build a timeline of keyframes for the animation.
-        
-        Timeline order:
-        1. Intro (overview)
-        2. Each snippet (with hold for audio)
-        3. Each sub-image target (camera pans to sub-image location)
-        4. Outro (back to overview)
-        """
-        keyframes = []
-        current_time = 0.0
-        
-        # Image center for overview shots
-        img_center_x = self.image_width // 2
-        img_center_y = self.image_height // 2
-        
-        # Intro: show overview
-        keyframes.append({
-            'time': current_time,
-            'zoom': 1.0,
-            'center_x': img_center_x,
-            'center_y': img_center_y,
-            'type': 'intro'
-        })
-        
-        current_time += self.intro_duration
-        keyframes.append({
-            'time': current_time,
-            'zoom': 1.0,
-            'center_x': img_center_x,
-            'center_y': img_center_y,
-            'type': 'intro_end'
-        })
-        
-        # For each snippet
-        for i, snippet in enumerate(self.snippets):
-            snippet_center_x = snippet.x + snippet.width // 2
-            snippet_center_y = snippet.y + snippet.height // 2
-            snippet_zoom = self._calculate_zoom_for_snippet(snippet)
-            
-            # Animate to snippet
-            current_time += self.snippet_duration
-            keyframes.append({
-                'time': current_time,
-                'zoom': snippet_zoom,
-                'center_x': snippet_center_x,
-                'center_y': snippet_center_y,
-                'type': 'snippet',
-                'index': i
-            })
-            
-            # Hold at snippet
-            duration = max(snippet.audio_duration, self.hold_duration)
-            current_time += duration
-            keyframes.append({
-                'time': current_time,
-                'zoom': snippet_zoom,
-                'center_x': snippet_center_x,
-                'center_y': snippet_center_y,
-                'type': 'snippet_hold',
-                'index': i
-            })
-        
-        # For each sub-image target - camera pans to the sub-image location
-        for i, target in enumerate(self.sub_image_targets):
-            target_center_x = target.x + target.width // 2
-            target_center_y = target.y + target.height // 2
-            target_zoom = self._calculate_zoom_for_region(target.width, target.height)
-            
-            # Animate to sub-image location
-            current_time += self.snippet_duration
-            keyframes.append({
-                'time': current_time,
-                'zoom': target_zoom,
-                'center_x': target_center_x,
-                'center_y': target_center_y,
-                'type': 'sub_image',
-                'index': i
-            })
-            
-            # Hold at sub-image
-            duration = max(target.audio_duration, self.hold_duration)
-            current_time += duration
-            keyframes.append({
-                'time': current_time,
-                'zoom': target_zoom,
-                'center_x': target_center_x,
-                'center_y': target_center_y,
-                'type': 'sub_image_hold',
-                'index': i
-            })
-        
-        # Outro: return to overview
-        current_time += self.outro_duration
-        keyframes.append({
-            'time': current_time,
-            'zoom': 1.0,
-            'center_x': img_center_x,
-            'center_y': img_center_y,
-            'type': 'outro'
-        })
-        
-        return keyframes
+        # Debug: print timeline
+        print("\n=== Timeline ===")
+        for kf in self.timeline:
+            print(f"  {kf['time']:.2f}s - {kf['type']} @ ({kf['center_x']}, {kf['center_y']}) zoom={kf['zoom']:.2f}")
+        print("================\n")
     
     def _smoothstep(self, t: float) -> float:
         """Smooth ease-in-out function: 3t² - 2t³"""
@@ -428,46 +260,29 @@ class KenBurnsGenerator:
             
             video = VideoClip(make_frame, duration=total_duration).with_fps(self.fps)
             
-            # Build audio
+            # Build audio from timeline keyframes
             audio_clips = []
-            current_time = self.intro_duration
             
-            # Snippet audio
-            for i, snippet in enumerate(self.snippets):
-                # Move to snippet
-                current_time += self.snippet_duration
-                
-                # Audio plays during hold
-                if snippet.audio_path and os.path.exists(snippet.audio_path):
-                    try:
-                        audio = AudioFileClip(snippet.audio_path)
-                        audio = audio.with_start(current_time)
-                        audio_clips.append(audio)
-                        print(f"Snippet {i+1} audio at {current_time:.2f}s")
-                    except Exception as e:
-                        print(f"Failed to load audio {snippet.audio_path}: {e}")
-                
-                # Hold duration
-                hold_dur = max(snippet.audio_duration, self.hold_duration)
-                current_time += hold_dur
-            
-            # Sub-image target audio (after all snippets)
-            for i, target in enumerate(self.sub_image_targets):
-                # Move to sub-image
-                current_time += self.snippet_duration
-                
-                if target.audio_path and os.path.exists(target.audio_path):
-                    try:
-                        audio = AudioFileClip(target.audio_path)
-                        audio = audio.with_start(current_time)
-                        audio_clips.append(audio)
-                        print(f"Sub-image {i+1} audio at {current_time:.2f}s")
-                    except Exception as e:
-                        print(f"Failed to load sub-image audio {target.audio_path}: {e}")
-                
-                # Hold duration
-                hold_dur = max(target.audio_duration, self.hold_duration)
-                current_time += hold_dur
+            for kf in self.timeline:
+                audio_path = kf.get('audio_path')
+                if audio_path and os.path.exists(audio_path):
+                    # Audio starts at the beginning of the "hold" phase
+                    # Find the matching hold keyframe
+                    if '_hold' in kf['type']:
+                        # Get the start time (previous keyframe's time)
+                        idx = self.timeline.index(kf)
+                        if idx > 0:
+                            audio_start = self.timeline[idx - 1]['time']
+                        else:
+                            audio_start = kf['time']
+                        
+                        try:
+                            audio = AudioFileClip(audio_path)
+                            audio = audio.with_start(audio_start)
+                            audio_clips.append(audio)
+                            print(f"Audio for {kf['type']} at {audio_start:.2f}s")
+                        except Exception as e:
+                            print(f"Failed to load audio {audio_path}: {e}")
             
             # Combine audio
             if audio_clips:
