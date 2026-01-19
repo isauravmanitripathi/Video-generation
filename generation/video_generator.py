@@ -1,24 +1,19 @@
 """
-Ken Burns Video Generator
+Ken Burns Video Generator - MoviePy Implementation
 
 Generates videos with smooth zoom/pan animations through image snippets.
-Uses ffmpeg zoompan filter for frame-by-frame animation.
+Uses MoviePy for frame-by-frame animation with proper sub-image overlay support.
 """
 
-import subprocess
 import os
-import math
+import numpy as np
 from dataclasses import dataclass
-from typing import List, Tuple, Optional
-
-
-@dataclass
-class Keyframe:
-    """Represents a camera position at a specific frame."""
-    frame: int
-    zoom: float  # 1.0 = original size, 2.0 = 2x zoom
-    center_x: int  # Center point in source image coords
-    center_y: int  # Center point in source image coords
+from typing import List, Tuple, Optional, Callable
+from PIL import Image
+from moviepy import (
+    VideoClip, CompositeVideoClip, AudioFileClip, 
+    CompositeAudioClip, concatenate_audioclips
+)
 
 
 @dataclass
@@ -33,12 +28,25 @@ class Snippet:
     audio_duration: float = 0.0
 
 
+@dataclass 
+class SubImageTarget:
+    """Represents a sub-image overlay that acts as a camera target."""
+    x: int  # Position on source image
+    y: int
+    width: int
+    height: int
+    pil_image: Image.Image  # The overlay image
+    audio_path: Optional[str] = None
+    audio_duration: float = 0.0
+
+
 class KenBurnsGenerator:
     """
     Generates Ken Burns style videos from an image with snippet regions.
     
     The video smoothly animates from an overview to each snippet,
     zooming in/out intelligently based on snippet size.
+    Sub-images are composited onto the source and treated as camera targets.
     """
     
     def __init__(
@@ -61,25 +69,26 @@ class KenBurnsGenerator:
         sub_images: List[dict] = None
     ):
         self.image_path = image_path
-        # Normalize snippets to Snippet objects
-        self.snippets = []
-        for s in snippets:
-            if isinstance(s, dict):
-                # Handle potential extra keys in dict that aren't in dataclass
-                # filter keys
-                valid_keys = {k: v for k, v in s.items() if k in Snippet.__annotations__}
-                self.snippets.append(Snippet(**valid_keys))
-            else:
-                self.snippets.append(s)
-                
         self.output_width = output_width
         self.output_height = output_height
         self.fps = fps
         self.ken_burns = ken_burns
-        self.sub_images = sub_images or []  # Store sub-images
+        self.min_zoom = min_zoom
+        self.max_zoom = max_zoom
+        self.show_boxes = show_boxes
+        self.box_color = box_color
+        self.box_thickness = box_thickness
         
-        # When Ken Burns is disabled, set all animation durations to 0
-        # This creates instant jump cuts between snippets
+        # Normalize snippets to Snippet objects
+        self.snippets = []
+        for s in snippets:
+            if isinstance(s, dict):
+                valid_keys = {k: v for k, v in s.items() if k in Snippet.__annotations__}
+                self.snippets.append(Snippet(**valid_keys))
+            else:
+                self.snippets.append(s)
+        
+        # When Ken Burns is disabled, set animation durations to 0 (instant cuts)
         if ken_burns:
             self.intro_duration = intro_duration
             self.snippet_duration = snippet_duration
@@ -90,488 +99,307 @@ class KenBurnsGenerator:
             self.outro_duration = 0.0
         
         self.hold_duration = hold_duration
-        self.min_zoom = min_zoom
-        self.max_zoom = max_zoom
-        self.show_boxes = show_boxes
-        self.box_color = box_color
-        self.box_thickness = box_thickness
         
-        # Get image dimensions
-        self.image_width, self.image_height = self._get_image_dimensions()
+        # Load source image
+        self.original_image = Image.open(image_path).convert('RGBA')
+        self.image_width, self.image_height = self.original_image.size
         
-        # Calculate keyframes
-        self.keyframes = self._calculate_keyframes()
+        # Process sub-images: composite onto source AND create targets
+        self.sub_image_targets = []
+        self.source_image = self._composite_sub_images(sub_images or [])
+        
+        # Calculate timeline (includes sub-image targets)
+        self.timeline = self._build_timeline()
     
-    def _get_image_dimensions(self) -> Tuple[int, int]:
-        """Get source image dimensions using ffprobe."""
-        try:
-            cmd = [
-                'ffprobe', '-v', 'error',
-                '-select_streams', 'v:0',
-                '-show_entries', 'stream=width,height',
-                '-of', 'csv=s=x:p=0',
-                self.image_path
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            width, height = map(int, result.stdout.strip().split('x'))
-            return width, height
-        except Exception as e:
-            # Fallback - assume 1920x1080 if ffprobe fails
-            print(f"Warning: Could not get image dimensions: {e}")
-            return 1920, 1080
+    def _composite_sub_images(self, sub_images: List[dict]) -> Image.Image:
+        """
+        Composite sub-images onto the source image.
+        Also creates SubImageTarget objects for camera movement.
+        
+        Returns the composited image.
+        """
+        result = self.original_image.copy()
+        
+        for sub_img in sub_images:
+            img_path = sub_img.get('image_path', '')
+            if not img_path or not os.path.exists(img_path):
+                print(f"Sub-image not found: {img_path}")
+                continue
+            
+            try:
+                overlay = Image.open(img_path).convert('RGBA')
+                
+                # Get position in source coordinates
+                pos = sub_img.get('position', (0, 0))
+                x, y = int(pos[0]), int(pos[1])
+                
+                print(f"Compositing sub-image at ({x}, {y}), size: {overlay.size}")
+                
+                # Paste overlay onto result
+                result.paste(overlay, (x, y), overlay)
+                
+                # Create a target for camera movement
+                # The target area is the bounding box of the sub-image
+                target = SubImageTarget(
+                    x=x,
+                    y=y,
+                    width=overlay.width,
+                    height=overlay.height,
+                    pil_image=overlay,
+                    audio_path=sub_img.get('audio_path'),
+                    audio_duration=sub_img.get('audio_duration', 0.0)
+                )
+                self.sub_image_targets.append(target)
+                
+            except Exception as e:
+                print(f"Failed to composite sub-image {img_path}: {e}")
+        
+        return result
+    
+    def _calculate_zoom_for_region(self, width: int, height: int) -> float:
+        """
+        Calculate optimal zoom level to fit a region in viewport.
+        """
+        padding_factor = 0.6  # Show the sub-image with more context
+        
+        zoom_x = (self.image_width * padding_factor) / width
+        zoom_y = (self.image_height * padding_factor) / height
+        
+        zoom = min(zoom_x, zoom_y)
+        return max(self.min_zoom, min(self.max_zoom, zoom))
     
     def _calculate_zoom_for_snippet(self, snippet: Snippet) -> float:
-        """
-        Calculate optimal zoom level to fit snippet in viewport.
-        
-        The zoom factor in ffmpeg zoompan means:
-        - zoom=1.0: entire source image is visible
-        - zoom=2.0: half the source image dimensions are visible (2x magnification)
-        
-        To fit a snippet:
-        - visible_width = image_width / zoom
-        - visible_height = image_height / zoom
-        - For snippet to fit: snippet.width <= visible_width AND snippet.height <= visible_height
-        
-        So: zoom <= image_width/snippet.width AND zoom <= image_height/snippet.height
-        """
-        # Leave 20% padding around snippet for better framing
+        """Calculate optimal zoom level to fit snippet in viewport."""
         padding_factor = 0.8
         
-        # Calculate max zoom that still shows entire snippet with padding
-        # snippet should fill padding_factor of the visible area
         zoom_x = (self.image_width * padding_factor) / snippet.width
         zoom_y = (self.image_height * padding_factor) / snippet.height
         
-        # Use the smaller zoom to ensure snippet fits fully
         zoom = min(zoom_x, zoom_y)
-        
-        # Clamp to reasonable range
         return max(self.min_zoom, min(self.max_zoom, zoom))
     
-    def _calculate_keyframes(self) -> List[Keyframe]:
+    def _build_timeline(self) -> List[dict]:
         """
-        Calculate all keyframes for the animation.
+        Build a timeline of keyframes for the animation.
         
-        Timeline:
-        - Intro: Full image overview
-        - Per snippet: Animate to snippet, hold (dynamic duration based on audio)
-        - Outro: Return to overview
+        Timeline order:
+        1. Intro (overview)
+        2. Each snippet (with hold for audio)
+        3. Each sub-image target (camera pans to sub-image location)
+        4. Outro (back to overview)
         """
         keyframes = []
-        current_frame = 0
+        current_time = 0.0
         
         # Image center for overview shots
         img_center_x = self.image_width // 2
         img_center_y = self.image_height // 2
         
-        # Intro keyframe (start)
-        keyframes.append(Keyframe(
-            frame=current_frame,
-            zoom=1.0,
-            center_x=img_center_x,
-            center_y=img_center_y
-        ))
+        # Intro: show overview
+        keyframes.append({
+            'time': current_time,
+            'zoom': 1.0,
+            'center_x': img_center_x,
+            'center_y': img_center_y,
+            'type': 'intro'
+        })
         
-        # End of intro
-        current_frame += int(self.intro_duration * self.fps)
-        keyframes.append(Keyframe(
-            frame=current_frame,
-            zoom=1.0,
-            center_x=img_center_x,
-            center_y=img_center_y
-        ))
+        current_time += self.intro_duration
+        keyframes.append({
+            'time': current_time,
+            'zoom': 1.0,
+            'center_x': img_center_x,
+            'center_y': img_center_y,
+            'type': 'intro_end'
+        })
         
-        # Keyframes for each snippet
-        for snippet in self.snippets:
+        # For each snippet
+        for i, snippet in enumerate(self.snippets):
             snippet_center_x = snippet.x + snippet.width // 2
             snippet_center_y = snippet.y + snippet.height // 2
             snippet_zoom = self._calculate_zoom_for_snippet(snippet)
             
             # Animate to snippet
-            current_frame += int(self.snippet_duration * self.fps)
-            keyframes.append(Keyframe(
-                frame=current_frame,
-                zoom=snippet_zoom,
-                center_x=snippet_center_x,
-                center_y=snippet_center_y
-            ))
+            current_time += self.snippet_duration
+            keyframes.append({
+                'time': current_time,
+                'zoom': snippet_zoom,
+                'center_x': snippet_center_x,
+                'center_y': snippet_center_y,
+                'type': 'snippet',
+                'index': i
+            })
             
             # Hold at snippet
-            # Use snippet's audio duration if available, else usage default hold duration
-            # Ensure at least minimal hold time (e.g. 1s) even if audio is short
             duration = max(snippet.audio_duration, self.hold_duration)
-            
-            current_frame += int(duration * self.fps)
-            keyframes.append(Keyframe(
-                frame=current_frame,
-                zoom=snippet_zoom,
-                center_x=snippet_center_x,
-                center_y=snippet_center_y
-            ))
+            current_time += duration
+            keyframes.append({
+                'time': current_time,
+                'zoom': snippet_zoom,
+                'center_x': snippet_center_x,
+                'center_y': snippet_center_y,
+                'type': 'snippet_hold',
+                'index': i
+            })
         
-        # Outro - return to overview
-        current_frame += int(self.outro_duration * self.fps)
-        keyframes.append(Keyframe(
-            frame=current_frame,
-            zoom=1.0,
-            center_x=img_center_x,
-            center_y=img_center_y
-        ))
+        # For each sub-image target - camera pans to the sub-image location
+        for i, target in enumerate(self.sub_image_targets):
+            target_center_x = target.x + target.width // 2
+            target_center_y = target.y + target.height // 2
+            target_zoom = self._calculate_zoom_for_region(target.width, target.height)
+            
+            # Animate to sub-image location
+            current_time += self.snippet_duration
+            keyframes.append({
+                'time': current_time,
+                'zoom': target_zoom,
+                'center_x': target_center_x,
+                'center_y': target_center_y,
+                'type': 'sub_image',
+                'index': i
+            })
+            
+            # Hold at sub-image
+            duration = max(target.audio_duration, self.hold_duration)
+            current_time += duration
+            keyframes.append({
+                'time': current_time,
+                'zoom': target_zoom,
+                'center_x': target_center_x,
+                'center_y': target_center_y,
+                'type': 'sub_image_hold',
+                'index': i
+            })
+        
+        # Outro: return to overview
+        current_time += self.outro_duration
+        keyframes.append({
+            'time': current_time,
+            'zoom': 1.0,
+            'center_x': img_center_x,
+            'center_y': img_center_y,
+            'type': 'outro'
+        })
         
         return keyframes
     
-    def _ease_in_out_expression(self, progress_var: str) -> str:
+    def _smoothstep(self, t: float) -> float:
+        """Smooth ease-in-out function: 3t² - 2t³"""
+        t = max(0, min(1, t))
+        return t * t * (3 - 2 * t)
+    
+    def _interpolate_at_time(self, t: float) -> dict:
+        """Get interpolated camera state at time t."""
+        if not self.timeline or len(self.timeline) < 2:
+            return {'zoom': 1.0, 'center_x': self.image_width // 2, 'center_y': self.image_height // 2}
+        
+        # Find the two keyframes we're between
+        for i in range(len(self.timeline) - 1):
+            kf1 = self.timeline[i]
+            kf2 = self.timeline[i + 1]
+            
+            if kf1['time'] <= t <= kf2['time']:
+                # Calculate progress
+                duration = kf2['time'] - kf1['time']
+                if duration == 0:
+                    progress = 1.0
+                else:
+                    progress = (t - kf1['time']) / duration
+                
+                # Apply smoothstep easing
+                eased = self._smoothstep(progress)
+                
+                # Interpolate values
+                return {
+                    'zoom': kf1['zoom'] + (kf2['zoom'] - kf1['zoom']) * eased,
+                    'center_x': kf1['center_x'] + (kf2['center_x'] - kf1['center_x']) * eased,
+                    'center_y': kf1['center_y'] + (kf2['center_y'] - kf1['center_y']) * eased
+                }
+        
+        # Beyond timeline - return last state
+        last = self.timeline[-1]
+        return {'zoom': last['zoom'], 'center_x': last['center_x'], 'center_y': last['center_y']}
+    
+    def _render_frame(self, t: float) -> np.ndarray:
         """
-        Build a smoothstep (ease-in-out) expression.
-        Formula: 3*t^2 - 2*t^3 where t is progress (0 to 1)
-        This gives smooth acceleration at start and deceleration at end.
+        Render a single frame at time t.
+        
+        This applies the Ken Burns zoom/pan to the composited image
+        (which already has sub-images baked in).
         """
-        t = progress_var
-        # smoothstep: t * t * (3 - 2 * t)
-        return f"({t})*({t})*(3-2*({t}))"
-    
-    def _build_zoom_expression(self) -> str:
-        """Build ffmpeg expression for zoom based on keyframes with smooth easing."""
-        if len(self.keyframes) < 2:
-            return "1"
+        # Get camera state at this time
+        state = self._interpolate_at_time(t)
+        zoom = state['zoom']
+        center_x = state['center_x']
+        center_y = state['center_y']
         
-        parts = []
-        for i in range(len(self.keyframes) - 1):
-            kf1 = self.keyframes[i]
-            kf2 = self.keyframes[i + 1]
-            
-            frame_diff = kf2.frame - kf1.frame
-            if frame_diff == 0:
-                continue
-            
-            # Progress from 0 to 1
-            progress = f"(on-{kf1.frame})/{frame_diff}"
-            
-            # Apply smoothstep easing for smooth motion
-            eased_progress = self._ease_in_out_expression(progress)
-            
-            # Interpolation with easing: start + (end - start) * eased_progress
-            lerp = f"{kf1.zoom}+({kf2.zoom}-{kf1.zoom})*{eased_progress}"
-            
-            if i == 0:
-                condition = f"lt(on,{kf2.frame})"
-            else:
-                condition = f"between(on,{kf1.frame},{kf2.frame})"
-            
-            parts.append(f"if({condition},{lerp}")
+        # Calculate visible region in source coords
+        visible_width = self.image_width / zoom
+        visible_height = self.image_height / zoom
         
-        # Close all if statements and add final value
-        expr = ""
-        for part in parts:
-            expr += part + ","
-        expr += str(self.keyframes[-1].zoom)
-        expr += ")" * len(parts)
+        # Calculate crop box (centered on center_x, center_y)
+        left = center_x - visible_width / 2
+        top = center_y - visible_height / 2
+        right = center_x + visible_width / 2
+        bottom = center_y + visible_height / 2
         
-        return expr
-    
-    def _build_x_expression(self) -> str:
-        """Build ffmpeg expression for x pan based on keyframes with smooth easing."""
-        if len(self.keyframes) < 2:
-            return f"(iw-iw/zoom)/2"
+        # Clamp to image bounds
+        if left < 0:
+            right -= left
+            left = 0
+        if top < 0:
+            bottom -= top
+            top = 0
+        if right > self.image_width:
+            left -= (right - self.image_width)
+            right = self.image_width
+        if bottom > self.image_height:
+            top -= (bottom - self.image_height)
+            bottom = self.image_height
         
-        parts = []
-        for i in range(len(self.keyframes) - 1):
-            kf1 = self.keyframes[i]
-            kf2 = self.keyframes[i + 1]
-            
-            frame_diff = kf2.frame - kf1.frame
-            if frame_diff == 0:
-                continue
-            
-            progress = f"(on-{kf1.frame})/{frame_diff}"
-            eased_progress = self._ease_in_out_expression(progress)
-            
-            # Interpolate center position with easing, then offset for viewport
-            lerp = f"{kf1.center_x}+({kf2.center_x}-{kf1.center_x})*{eased_progress}-(iw/zoom)/2"
-            
-            if i == 0:
-                condition = f"lt(on,{kf2.frame})"
-            else:
-                condition = f"between(on,{kf1.frame},{kf2.frame})"
-            
-            parts.append(f"if({condition},{lerp}")
+        left = max(0, left)
+        top = max(0, top)
+        right = min(self.image_width, right)
+        bottom = min(self.image_height, bottom)
         
-        # Final position
-        final_kf = self.keyframes[-1]
-        final_x = f"({final_kf.center_x}-(iw/zoom)/2)"
+        # Crop and resize from the composited image (includes sub-images)
+        cropped = self.source_image.crop((int(left), int(top), int(right), int(bottom)))
+        resized = cropped.resize((self.output_width, self.output_height), Image.Resampling.LANCZOS)
         
-        expr = ""
-        for part in parts:
-            expr += part + ","
-        expr += final_x
-        expr += ")" * len(parts)
-        
-        return expr
-    
-    def _build_y_expression(self) -> str:
-        """Build ffmpeg expression for y pan based on keyframes with smooth easing."""
-        if len(self.keyframes) < 2:
-            return f"(ih-ih/zoom)/2"
-        
-        parts = []
-        for i in range(len(self.keyframes) - 1):
-            kf1 = self.keyframes[i]
-            kf2 = self.keyframes[i + 1]
+        # Draw boxes if enabled
+        if self.show_boxes:
+            from PIL import ImageDraw
+            draw = ImageDraw.Draw(resized)
             
-            frame_diff = kf2.frame - kf1.frame
-            if frame_diff == 0:
-                continue
-            
-            progress = f"(on-{kf1.frame})/{frame_diff}"
-            eased_progress = self._ease_in_out_expression(progress)
-            
-            lerp = f"{kf1.center_y}+({kf2.center_y}-{kf1.center_y})*{eased_progress}-(ih/zoom)/2"
-            
-            if i == 0:
-                condition = f"lt(on,{kf2.frame})"
-            else:
-                condition = f"between(on,{kf1.frame},{kf2.frame})"
-            
-            parts.append(f"if({condition},{lerp}")
+            for i, snippet in enumerate(self.snippets):
+                # Transform snippet coords to frame coords
+                box_left = int((snippet.x - left) * (self.output_width / visible_width))
+                box_top = int((snippet.y - top) * (self.output_height / visible_height))
+                box_right = int((snippet.x + snippet.width - left) * (self.output_width / visible_width))
+                box_bottom = int((snippet.y + snippet.height - top) * (self.output_height / visible_height))
+                
+                # Draw box
+                draw.rectangle(
+                    [box_left, box_top, box_right, box_bottom],
+                    outline=self.box_color,
+                    width=self.box_thickness
+                )
         
-        final_kf = self.keyframes[-1]
-        final_y = f"({final_kf.center_y}-(ih/zoom)/2)"
+        # Convert to RGB for video output
+        if resized.mode == 'RGBA':
+            background = Image.new('RGB', resized.size, (0, 0, 0))
+            background.paste(resized, mask=resized.split()[3])
+            resized = background
         
-        expr = ""
-        for part in parts:
-            expr += part + ","
-        expr += final_y
-        expr += ")" * len(parts)
-        
-        return expr
+        return np.array(resized)
     
     def get_total_duration(self) -> float:
         """Get total video duration in seconds."""
-        if not self.keyframes:
+        if not self.timeline:
             return 0
-        return self.keyframes[-1].frame / self.fps
+        return self.timeline[-1]['time']
     
-    def build_ffmpeg_command(self, output_path: str) -> List[str]:
-        """Build the complete ffmpeg command."""
-        zoom_expr = self._build_zoom_expression()
-        x_expr = self._build_x_expression()
-        y_expr = self._build_y_expression()
-        
-        total_frames = self.keyframes[-1].frame if self.keyframes else 1
-        video_duration = total_frames / self.fps
-        
-        # Build filter chain
-        filters = []
-        
-        # --- Timeline Calculation for Boxes & Audio ---
-        # We need to reconstruct the timeline to know exactly when:
-        # 1. Boxes should appear/disappear
-        # 2. Audio clips should start playing
-        
-        current_time = self.intro_duration
-        
-        # Audio inputs start from index 1 (0 is image)
-        audio_inputs = []
-        audio_filters = []
-        mixed_audio_labels = []
-        audio_input_count = 0  # Track actual number of audio inputs
-        
-        for i, snippet in enumerate(self.snippets):
-            # Move to snippet
-            move_start = current_time
-            move_end = current_time + self.snippet_duration
-            
-            # Hold at snippet (Audio plays here)
-            # Use max of audio duration or default hold
-            hold_dur = max(snippet.audio_duration, self.hold_duration)
-            hold_start = move_end
-            hold_end = hold_start + hold_dur
-            
-            # 1. Drawbox Filter
-            if self.show_boxes:
-                # Box visible during hold
-                drawbox = (
-                    f"drawbox=x={snippet.x}:y={snippet.y}:"
-                    f"w={snippet.width}:h={snippet.height}:"
-                    f"color={self.box_color}@0.9:t={self.box_thickness}:"
-                    f"enable='between(t,{hold_start:.2f},{hold_end:.2f})'"
-                )
-                filters.append(drawbox)
-            
-            # 2. Audio Processing
-            if snippet.audio_path and os.path.exists(snippet.audio_path):
-                audio_input_count += 1
-                input_idx = audio_input_count  # FFmpeg input index (0 is video, so 1, 2, 3... for audio)
-                audio_inputs.extend(['-i', snippet.audio_path])
-                
-                # Delay audio to start at hold_start
-                delay_ms = int(hold_start * 1000)
-                label = f"a{i}"
-                # adelay adds silence at start. all=1 applies to all channels
-                audio_filters.append(f"[{input_idx}:a]adelay={delay_ms}|{delay_ms}[{label}]")
-                mixed_audio_labels.append(f"[{label}]")
-            
-            # Update time for next snippet
-            current_time = hold_end
-        
-        # --- Sub-Image Overlays ---
-        # Track sub-image inputs and overlay filters
-        sub_image_inputs = []
-        sub_image_overlays = []
-        sub_image_audio_labels = []
-        
-        video_duration = self.keyframes[-1].frame / self.fps if self.keyframes else 1
-        
-        # First pass: collect all sub-image audio (goes into audio_inputs)
-        for idx, sub_img in enumerate(self.sub_images):
-            # Calculate when the sub-image should appear
-            after_snip_idx = sub_img.get('after_snip', 0)
-            
-            # Find the end time of the referenced snip
-            sub_start_time = self.intro_duration
-            for i in range(min(after_snip_idx + 1, len(self.snippets))):
-                snippet = self.snippets[i]
-                hold_dur = max(snippet.audio_duration, self.hold_duration)
-                sub_start_time += self.snippet_duration + hold_dur
-            
-            # Sub-image audio
-            audio_path = sub_img.get('audio_path')
-            if audio_path and os.path.exists(audio_path):
-                audio_input_count += 1
-                audio_inputs.extend(['-i', audio_path])
-                delay_ms = int(sub_start_time * 1000)
-                label = f"sa{idx}"
-                audio_filters.append(f"[{audio_input_count}:a]adelay={delay_ms}|{delay_ms}[{label}]")
-                sub_image_audio_labels.append(f"[{label}]")
-        
-        # Second pass: collect all sub-image video inputs (after ALL audio inputs)
-        # These will be added after audio_inputs in the command
-        sub_image_input_start_idx = audio_input_count + 1  # Track where sub-image videos start
-        
-        for idx, sub_img in enumerate(self.sub_images):
-            # Recalculate timing (same as before)
-            after_snip_idx = sub_img.get('after_snip', 0)
-            sub_start_time = self.intro_duration
-            for i in range(min(after_snip_idx + 1, len(self.snippets))):
-                snippet = self.snippets[i]
-                hold_dur = max(snippet.audio_duration, self.hold_duration)
-                sub_start_time += self.snippet_duration + hold_dur
-            
-            persistent = sub_img.get('persistent', False)
-            sub_audio_dur = sub_img.get('audio_duration', 0.0)
-            if persistent:
-                sub_end_time = video_duration
-            else:
-                sub_end_time = sub_start_time + max(sub_audio_dur, 2.0)
-            
-            # Add sub-image file as input
-            img_path = sub_img.get('image_path', '')
-            if img_path and os.path.exists(img_path):
-                # Index is: all audio inputs + 1 (for main image) + position in sub_image_inputs
-                img_input_idx = sub_image_input_start_idx + len(sub_image_inputs) // 2  # -i counts as 2 elements
-                sub_image_inputs.extend(['-i', img_path])
-                
-                # Get position (relative to source image, needs scaling)
-                pos = sub_img.get('position', (0, 0))
-                scale_x = self.output_width / self.image_width if self.image_width else 1
-                scale_y = self.output_height / self.image_height if self.image_height else 1
-                overlay_x = int(pos[0] * scale_x)
-                overlay_y = int(pos[1] * scale_y)
-                
-                sub_image_overlays.append({
-                    'input_idx': img_input_idx,
-                    'x': overlay_x,
-                    'y': overlay_y,
-                    'start': sub_start_time,
-                    'end': sub_end_time
-                })
-            
-        # Build zoompan filter
-        zoompan_filter = (
-            f"zoompan="
-            f"z='{zoom_expr}':"
-            f"x='{x_expr}':"
-            f"y='{y_expr}':"
-            f"d=1:"
-            f"s={self.output_width}x{self.output_height}:"
-            f"fps={self.fps}"
-        )
-        filters.append(zoompan_filter)
-        
-        # Combine video filters
-        full_vf = ",".join(filters)
-        
-        # Command construction
-        cmd = ['ffmpeg', '-y']
-        
-        # Video Input
-        cmd.extend(['-loop', '1', '-i', self.image_path])
-        
-        # Audio Inputs
-        cmd.extend(audio_inputs)
-        
-        # Sub-image inputs (after audio inputs)
-        cmd.extend(sub_image_inputs)
-        
-        # Complex Filter Network
-        filter_complex = []
-        
-        # Video Graph - start with zoompan on input 0
-        video_label = "outv"
-        
-        if sub_image_overlays:
-            # Chain overlay filters: [0:v]zoompan[zp];[zp][1:v]overlay...[ov1];[ov1][2:v]overlay...[outv]
-            filter_complex.append(f"[0:v]{full_vf}[zp]")
-            
-            prev_label = "zp"
-            for i, ov in enumerate(sub_image_overlays):
-                next_label = f"ov{i}" if i < len(sub_image_overlays) - 1 else video_label
-                # Scale sub-image to reasonable size and overlay with enable timing
-                overlay_filter = (
-                    f"[{ov['input_idx']}:v]scale=150:-1[si{i}];"
-                    f"[{prev_label}][si{i}]overlay=x={ov['x']}:y={ov['y']}:"
-                    f"enable='between(t,{ov['start']:.2f},{ov['end']:.2f})'[{next_label}]"
-                )
-                filter_complex.append(overlay_filter)
-                prev_label = next_label
-        else:
-            filter_complex.append(f"[0:v]{full_vf}[{video_label}]")
-        
-        # Audio Graph - combine snippet audio and sub-image audio
-        all_audio_labels = mixed_audio_labels + sub_image_audio_labels
-        
-        if all_audio_labels:
-            # Mix all delayed audio streams
-            amix_cmd = f"{''.join(all_audio_labels)}amix=inputs={len(all_audio_labels)}:duration=longest[outa]"
-            filter_complex.extend(audio_filters)
-            filter_complex.append(amix_cmd)
-            has_audio = True
-        else:
-            has_audio = False
-            
-        cmd.extend(['-filter_complex', ";".join(filter_complex)])
-        
-        # Map outputs
-        cmd.extend(['-map', f'[{video_label}]'])
-        if has_audio:
-            cmd.extend(['-map', '[outa]'])
-            
-        # Duration and Encoding settings
-        cmd.extend([
-            '-t', str(video_duration),
-            '-pix_fmt', 'yuv420p',
-            '-c:v', 'libx264',
-            '-preset', 'medium',
-            '-crf', '23',
-            '-c:a', 'aac', # Encode audio
-            '-b:a', '192k',
-            output_path
-        ])
-        
-        return cmd
-    
-    def generate(self, output_path: str, progress_callback=None) -> Tuple[bool, str]:
+    def generate(self, output_path: str, progress_callback: Callable[[str], None] = None) -> Tuple[bool, str]:
         """
         Generate the video.
         
@@ -585,30 +413,93 @@ class KenBurnsGenerator:
         if not self.snippets:
             return False, "No snippets defined. Create at least one snippet first."
         
-        cmd = self.build_ffmpeg_command(output_path)
-        
         if progress_callback:
             progress_callback("Starting video generation...")
         
         try:
-            # Run ffmpeg
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
+            total_duration = self.get_total_duration()
+            
+            if progress_callback:
+                progress_callback(f"Rendering {total_duration:.1f}s video at {self.fps}fps...")
+            
+            # Create video clip using make_frame function
+            def make_frame(t):
+                return self._render_frame(t)
+            
+            video = VideoClip(make_frame, duration=total_duration).with_fps(self.fps)
+            
+            # Build audio
+            audio_clips = []
+            current_time = self.intro_duration
+            
+            # Snippet audio
+            for i, snippet in enumerate(self.snippets):
+                # Move to snippet
+                current_time += self.snippet_duration
+                
+                # Audio plays during hold
+                if snippet.audio_path and os.path.exists(snippet.audio_path):
+                    try:
+                        audio = AudioFileClip(snippet.audio_path)
+                        audio = audio.with_start(current_time)
+                        audio_clips.append(audio)
+                        print(f"Snippet {i+1} audio at {current_time:.2f}s")
+                    except Exception as e:
+                        print(f"Failed to load audio {snippet.audio_path}: {e}")
+                
+                # Hold duration
+                hold_dur = max(snippet.audio_duration, self.hold_duration)
+                current_time += hold_dur
+            
+            # Sub-image target audio (after all snippets)
+            for i, target in enumerate(self.sub_image_targets):
+                # Move to sub-image
+                current_time += self.snippet_duration
+                
+                if target.audio_path and os.path.exists(target.audio_path):
+                    try:
+                        audio = AudioFileClip(target.audio_path)
+                        audio = audio.with_start(current_time)
+                        audio_clips.append(audio)
+                        print(f"Sub-image {i+1} audio at {current_time:.2f}s")
+                    except Exception as e:
+                        print(f"Failed to load sub-image audio {target.audio_path}: {e}")
+                
+                # Hold duration
+                hold_dur = max(target.audio_duration, self.hold_duration)
+                current_time += hold_dur
+            
+            # Combine audio
+            if audio_clips:
+                if progress_callback:
+                    progress_callback("Combining audio...")
+                final_audio = CompositeAudioClip(audio_clips)
+                video = video.with_audio(final_audio)
+            
+            # Write video
+            if progress_callback:
+                progress_callback("Encoding video...")
+            
+            video.write_videofile(
+                output_path,
+                fps=self.fps,
+                codec='libx264',
+                audio_codec='aac',
+                preset='medium',
+                threads=4,
+                logger=None  # Suppress moviepy logs
             )
             
-            stdout, stderr = process.communicate()
+            # Cleanup
+            video.close()
+            for clip in audio_clips:
+                clip.close()
             
-            if process.returncode == 0:
-                return True, f"Video generated successfully: {output_path}"
-            else:
-                return False, f"FFmpeg error: {stderr}"
-                
-        except FileNotFoundError:
-            return False, "FFmpeg not found. Please install FFmpeg."
+            return True, f"Video generated successfully: {output_path}"
+            
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return False, f"Error: {str(e)}"
 
 
@@ -619,7 +510,7 @@ def generate_video_from_snippets(
     aspect_ratio: str = "9:16",
     show_boxes: bool = False,
     ken_burns: bool = True,
-    progress_callback=None,
+    progress_callback: Callable[[str], None] = None,
     sub_images: List[dict] = None
 ) -> Tuple[bool, str]:
     """
@@ -684,4 +575,3 @@ def generate_video_from_snippets(
     )
     
     return generator.generate(output_path, progress_callback)
-
