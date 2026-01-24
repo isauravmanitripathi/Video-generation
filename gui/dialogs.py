@@ -56,9 +56,9 @@ class ToggleSwitch(QWidget):
         
         # Background track
         if self._checked:
-            track_color = QColor("#4CAF50")  # Green when ON
+            track_color = QColor("#0078d4")  # Windows blue when ON
         else:
-            track_color = QColor("#555555")  # Gray when OFF
+            track_color = QColor("#c1c1c1")  # Gray when OFF
         
         painter.setBrush(QBrush(track_color))
         painter.setPen(Qt.NoPen)
@@ -83,11 +83,11 @@ class OptionRow(QWidget):
         text_layout.setSpacing(2)
         
         self.title_label = QLabel(title)
-        self.title_label.setStyleSheet("font-size: 14px; font-weight: bold; color: white;")
+        self.title_label.setStyleSheet("font-size: 14px; font-weight: 600; color: #202020;")
         text_layout.addWidget(self.title_label)
         
         self.desc_label = QLabel(description)
-        self.desc_label.setStyleSheet("font-size: 11px; color: #aaa;")
+        self.desc_label.setStyleSheet("font-size: 12px; color: #666666;")
         self.desc_label.setWordWrap(True)
         text_layout.addWidget(self.desc_label)
         
@@ -107,11 +107,11 @@ class VideoOptionsDialog(QDialog):
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Video Options")
-        self.setFixedWidth(400)
+        self.setWindowTitle("Video Options - VideoForge")
+        self.setFixedWidth(480)
         self.setStyleSheet("""
             QDialog {
-                background-color: #2b2b2b;
+                background-color: #fafafa;
             }
         """)
         
@@ -120,23 +120,26 @@ class VideoOptionsDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         
         # Header
-        header = QLabel("Configure Video Options")
+        header = QLabel("Video Generation Options")
         header.setStyleSheet("""
-            font-size: 16px; 
-            font-weight: bold; 
-            color: white; 
-            padding: 20px;
-            background-color: #333;
+            QLabel {
+                font-size: 20px; 
+                font-weight: 600; 
+                color: #202020; 
+                padding: 24px;
+                background-color: #ffffff;
+                border-bottom: 1px solid #e1e1e1;
+            }
         """)
         header.setAlignment(Qt.AlignCenter)
         layout.addWidget(header)
         
         # Options container
         options_container = QWidget()
-        options_container.setStyleSheet("background-color: #2b2b2b;")
+        options_container.setStyleSheet("background-color: #fafafa;")
         options_layout = QVBoxLayout(options_container)
         options_layout.setSpacing(0)
-        options_layout.setContentsMargins(0, 10, 0, 10)
+        options_layout.setContentsMargins(0, 16, 0, 16)
         
         # === Option Rows ===
         
@@ -151,7 +154,7 @@ class VideoOptionsDialog(QDialog):
         # Divider
         divider0 = QFrame()
         divider0.setFrameShape(QFrame.HLine)
-        divider0.setStyleSheet("background-color: #444; margin: 0 15px;")
+        divider0.setStyleSheet("background-color: #e1e1e1; margin: 0 16px;")
         divider0.setFixedHeight(1)
         options_layout.addWidget(divider0)
         
@@ -166,7 +169,7 @@ class VideoOptionsDialog(QDialog):
         # Divider
         divider1 = QFrame()
         divider1.setFrameShape(QFrame.HLine)
-        divider1.setStyleSheet("background-color: #444; margin: 0 15px;")
+        divider1.setStyleSheet("background-color: #e1e1e1; margin: 0 16px;")
         divider1.setFixedHeight(1)
         options_layout.addWidget(divider1)
         
@@ -183,10 +186,13 @@ class VideoOptionsDialog(QDialog):
         # Info label for when zoom is off
         self.info_label = QLabel()
         self.info_label.setStyleSheet("""
-            color: #888;
-            font-size: 11px;
-            padding: 10px 15px;
-            background-color: #2b2b2b;
+            QLabel {
+                color: #666666;
+                font-size: 12px;
+                padding: 12px 16px;
+                background-color: #e8f4f8;
+                border-left: 3px solid #0078d4;
+            }
         """)
         self.info_label.setWordWrap(True)
         self.info_label.hide()
@@ -197,21 +203,31 @@ class VideoOptionsDialog(QDialog):
         
         # Buttons
         btn_container = QWidget()
-        btn_container.setStyleSheet("background-color: #333; padding: 15px;")
+        btn_container.setStyleSheet("""
+            QWidget {
+                background-color: #ffffff;
+                border-top: 1px solid #e1e1e1;
+            }
+        """)
         btn_layout = QHBoxLayout(btn_container)
-        btn_layout.setContentsMargins(15, 15, 15, 15)
+        btn_layout.setContentsMargins(20, 16, 20, 16)
+        btn_layout.setSpacing(12)
         
         btn_cancel = QPushButton("Cancel")
+        btn_cancel.setCursor(Qt.PointingHandCursor)
         btn_cancel.setStyleSheet("""
             QPushButton {
-                background-color: #555;
-                color: white;
-                padding: 10px 25px;
-                border-radius: 5px;
+                background-color: #ffffff;
+                color: #202020;
+                padding: 8px 20px;
+                border-radius: 4px;
                 font-size: 13px;
+                font-weight: 400;
+                border: 1px solid #d1d1d1;
             }
             QPushButton:hover {
-                background-color: #666;
+                background-color: #f5f5f5;
+                border-color: #b1b1b1;
             }
         """)
         btn_cancel.clicked.connect(self.reject)
@@ -220,17 +236,19 @@ class VideoOptionsDialog(QDialog):
         btn_layout.addStretch()
         
         btn_generate = QPushButton("Generate Video")
+        btn_generate.setCursor(Qt.PointingHandCursor)
         btn_generate.setStyleSheet("""
             QPushButton {
-                background-color: #5a9bd6;
+                background-color: #0078d4;
                 color: white;
-                padding: 10px 25px;
-                border-radius: 5px;
+                padding: 8px 20px;
+                border-radius: 4px;
                 font-size: 13px;
-                font-weight: bold;
+                font-weight: 400;
+                border: none;
             }
             QPushButton:hover {
-                background-color: #4a8bc6;
+                background-color: #106ebe;
             }
         """)
         btn_generate.clicked.connect(self.accept)
@@ -254,7 +272,7 @@ class VideoOptionsDialog(QDialog):
             self.ken_burns_row.toggle.setChecked(False)
             self.ken_burns_row.setEnabled(False)
             self.box_overlay_row.toggle.setChecked(True)
-            self.info_label.setText("ℹ️ Zoom OFF: Full image shown with box overlays. Sub-images will appear/disappear at their positions.")
+            self.info_label.setText("Zoom OFF: Full image shown with box overlays. Sub-images will appear/disappear at their positions.")
             self.info_label.show()
         else:
             self.ken_burns_row.setEnabled(True)
@@ -275,35 +293,84 @@ class VideoOptionsDialog(QDialog):
 class AspectRatioDialog(QDialog):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Select Video Size")
-        self.setFixedSize(300, 200)
+        self.setWindowTitle("VideoForge - Select Aspect Ratio")
+        self.setFixedSize(520, 380)
         
-        layout = QVBoxLayout()
-        
-        label = QLabel("Choose the aspect ratio for your video:")
-        layout.addWidget(label)
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        layout.setContentsMargins(24, 24, 24, 24)
+
+        title = QLabel("Choose an aspect ratio")
+        title.setStyleSheet("QLabel { font-size: 22px; font-weight: 600; }")
+        layout.addWidget(title)
+
+        subtitle = QLabel("This sets the video canvas size for this session.")
+        subtitle.setStyleSheet("QLabel { color: palette(mid); }")
+        layout.addWidget(subtitle)
         
         self.ratio_group = QButtonGroup(self)
-        
+
         self.rb_reel = QRadioButton("Reel (9:16)")
+        self.rb_reel.setChecked(True)
+        card_reel = self._make_ratio_card(self.rb_reel, "Best for Shorts / Reels / TikTok")
+
         self.rb_youtube = QRadioButton("YouTube (16:9)")
+        card_yt = self._make_ratio_card(self.rb_youtube, "Standard landscape video")
+
         self.rb_square = QRadioButton("Square (1:1)")
-        
-        self.rb_reel.setChecked(True) # Default
-        
-        layout.addWidget(self.rb_reel)
-        layout.addWidget(self.rb_youtube)
-        layout.addWidget(self.rb_square)
-        
+        card_sq = self._make_ratio_card(self.rb_square, "Feeds and square layouts")
+
+        layout.addWidget(card_reel)
+        layout.addWidget(card_yt)
+        layout.addWidget(card_sq)
+
         self.ratio_group.addButton(self.rb_reel)
         self.ratio_group.addButton(self.rb_youtube)
         self.ratio_group.addButton(self.rb_square)
-        
-        btn_confirm = QPushButton("Confirm")
+
+        layout.addStretch(1)
+
+        footer_layout = QHBoxLayout()
+        btn_confirm = QPushButton("Continue")
+        btn_confirm.setCursor(Qt.PointingHandCursor)
+        btn_confirm.setObjectName("PrimaryButton")
         btn_confirm.clicked.connect(self.accept)
-        layout.addWidget(btn_confirm)
-        
-        self.setLayout(layout)
+        footer_layout.addStretch(1)
+        footer_layout.addWidget(btn_confirm)
+        layout.addLayout(footer_layout)
+
+        self.ratio_group.buttonClicked.connect(self._sync_ratio_cards)
+        self._sync_ratio_cards()
+
+    def _make_ratio_card(self, radio: QRadioButton, subtitle: str) -> QFrame:
+        card = QFrame()
+        card.setObjectName("Card")
+        card.setProperty("checked", False)
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(16, 14, 16, 14)
+        card_layout.setSpacing(6)
+
+        radio.setStyleSheet("QRadioButton { font-size: 15px; font-weight: 600; }")
+        sub = QLabel(subtitle)
+        sub.setStyleSheet("QLabel { color: palette(mid); }")
+
+        card_layout.addWidget(radio)
+        card_layout.addWidget(sub)
+
+        # click anywhere
+        card.mousePressEvent = lambda e, r=radio: r.setChecked(True)
+        return card
+
+    def _sync_ratio_cards(self):
+        for i in range(self.layout().count()):
+            item = self.layout().itemAt(i)
+            w = item.widget()
+            if isinstance(w, QFrame) and w.objectName() == "Card":
+                rb = w.findChild(QRadioButton)
+                w.setProperty("checked", bool(rb and rb.isChecked()))
+                w.style().unpolish(w)
+                w.style().polish(w)
+                w.update()
         
     def get_selected_ratio(self):
         if self.rb_reel.isChecked():

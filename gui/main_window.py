@@ -5,12 +5,13 @@ from datetime import datetime
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QPushButton, QLabel, QTextEdit, QComboBox, QFileDialog,
                              QScrollArea, QFrame, QMessageBox, QMenuBar, QMenu, QAction,
-                             QActionGroup, QToolBar, QDialog)
+                             QActionGroup, QToolBar, QDialog, QApplication)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from gui.custom_widgets import LogPanel, ImageCanvas, SnippetItemWidget
 from gui.dialogs import AspectRatioDialog, VideoOptionsDialog
 from generation.video_generator import generate_video_from_snippets
 from audio.tts_handler import TTSHandler
+from gui.theme import SettingsStore, AppSettings, ThemeName, apply_theme
 
 class VideoGeneratorWorker(QThread):
     """Background thread for video generation."""
@@ -107,11 +108,13 @@ class VideoGeneratorWorker(QThread):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, ratio_name):
+    def __init__(self, ratio_name, settings_store: SettingsStore, initial_theme: ThemeName = "dark"):
         super().__init__()
-        self.setWindowTitle("Video Content Generator")
-        self.resize(1200, 800)
+        self.setWindowTitle("VideoForge - Professional Video Generator")
+        self.resize(1400, 900)
         self.ratio_name = ratio_name  # Store for video generation
+        self.settings_store = settings_store
+        self.current_theme: ThemeName = initial_theme
         self.current_image_path = None  # Track current image
         self.video_worker = None  # Video generation thread
         self.tts_handler = TTSHandler()
@@ -141,17 +144,43 @@ class MainWindow(QMainWindow):
         # --- 1. Left Panel: Logs ---
         left_container = QWidget()
         left_layout = QVBoxLayout(left_container)
-        left_container.setStyleSheet("background-color: #2b2b2b; color: #ddd;")
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(0)
+        left_container.setStyleSheet("""
+            QWidget {
+                background-color: #f3f3f3;
+                border-right: 1px solid #e1e1e1;
+            }
+        """)
+        
+        # Log header
+        log_header = QLabel("Activity Log")
+        log_header.setStyleSheet("""
+            QLabel {
+                background-color: #ffffff;
+                color: #202020;
+                font-size: 14px;
+                font-weight: 600;
+                padding: 14px 20px;
+                border-bottom: 1px solid #e1e1e1;
+            }
+        """)
+        left_layout.addWidget(log_header)
         
         self.log_panel = LogPanel()
         left_layout.addWidget(self.log_panel)
-        self.log_panel.log(f"Application started. Mode: {ratio_name}")
+        self.log_panel.log(f"VideoForge initialized. Aspect ratio: {ratio_name}")
         
         # --- 2. Center Panel: Image Canvas ---
         center_container = QWidget()
         center_layout = QVBoxLayout(center_container)
-        # Removed setAlignment(Qt.AlignCenter) to allow canvas to expand
-        center_container.setStyleSheet("background-color: #121212;")
+        center_layout.setContentsMargins(0, 0, 0, 0)
+        center_layout.setSpacing(0)
+        center_container.setStyleSheet("""
+            QWidget {
+                background-color: #fafafa;
+            }
+        """)
         
         self.canvas = ImageCanvas(ratio_name)
         # Connect canvas signals
@@ -160,218 +189,348 @@ class MainWindow(QMainWindow):
         
         center_layout.addWidget(self.canvas)
         
-        # Upload and Snip Buttons
-        btn_row = QHBoxLayout()
+        # Control toolbar
+        toolbar_container = QWidget()
+        toolbar_container.setStyleSheet("""
+            QWidget {
+                background-color: #ffffff;
+                border-bottom: 1px solid #e1e1e1;
+            }
+        """)
+        toolbar_layout = QVBoxLayout(toolbar_container)
+        toolbar_layout.setContentsMargins(20, 14, 20, 14)
+        toolbar_layout.setSpacing(12)
+        
+        # Primary actions row
+        primary_row = QHBoxLayout()
+        primary_row.setSpacing(8)
         
         btn_upload = QPushButton("Upload Image")
+        btn_upload.setCursor(Qt.PointingHandCursor)
         btn_upload.setStyleSheet("""
             QPushButton {
-                 background-color: #444; color: white; padding: 8px; border-radius: 4px; border: 1px solid #555;
+                background-color: #0078d4;
+                color: white;
+                padding: 8px 16px;
+                border-radius: 4px;
+                border: none;
+                font-size: 13px;
+                font-weight: 400;
             }
-            QPushButton:hover { background-color: #555; }
+            QPushButton:hover {
+                background-color: #106ebe;
+            }
+            QPushButton:pressed {
+                background-color: #005a9e;
+            }
         """)
         btn_upload.clicked.connect(self.open_upload_dialog)
-        btn_row.addWidget(btn_upload)
+        primary_row.addWidget(btn_upload)
         
-        self.btn_snip = QPushButton("✂ Snip")
+        self.btn_snip = QPushButton("Create Region")
         self.btn_snip.setCheckable(True)
+        self.btn_snip.setCursor(Qt.PointingHandCursor)
         self.btn_snip.setStyleSheet("""
             QPushButton {
-                background-color: #444; color: white; padding: 8px; border-radius: 4px; border: 1px solid #555;
+                background-color: #ffffff;
+                color: #202020;
+                padding: 8px 16px;
+                border-radius: 4px;
+                border: 1px solid #d1d1d1;
+                font-size: 13px;
+                font-weight: 400;
             }
-            QPushButton:hover { background-color: #555; }
-            QPushButton:checked { background-color: #e74c3c; border: 2px solid #c0392b; }
+            QPushButton:hover {
+                background-color: #f5f5f5;
+                border-color: #b1b1b1;
+            }
+            QPushButton:checked {
+                background-color: #0078d4;
+                color: white;
+                border-color: #0078d4;
+            }
         """)
         self.btn_snip.clicked.connect(self.toggle_snip_mode)
-        btn_row.addWidget(self.btn_snip)
+        primary_row.addWidget(self.btn_snip)
         
-        center_layout.addLayout(btn_row)
+        primary_row.addStretch()
+        toolbar_layout.addLayout(primary_row)
         
-        # Sub-Image Controls Row
-        sub_image_row = QHBoxLayout()
+        # Secondary actions row
+        secondary_row = QHBoxLayout()
+        secondary_row.setSpacing(8)
         
-        self.btn_add_subimage = QPushButton("🖼 Add Sub-Image")
+        self.btn_add_subimage = QPushButton("Add Overlay")
+        self.btn_add_subimage.setCursor(Qt.PointingHandCursor)
         self.btn_add_subimage.setStyleSheet("""
             QPushButton {
-                background-color: #2e7d32; color: white; padding: 8px; border-radius: 4px; border: 1px solid #1b5e20;
+                background-color: #ffffff;
+                color: #202020;
+                padding: 6px 14px;
+                border-radius: 4px;
+                border: 1px solid #d1d1d1;
+                font-size: 12px;
+                font-weight: 400;
             }
-            QPushButton:hover { background-color: #388e3c; }
+            QPushButton:hover {
+                background-color: #f5f5f5;
+                border-color: #b1b1b1;
+            }
         """)
         self.btn_add_subimage.clicked.connect(self.add_sub_image)
-        sub_image_row.addWidget(self.btn_add_subimage)
+        secondary_row.addWidget(self.btn_add_subimage)
         
-        self.btn_place_subimage = QPushButton("📍 Place Sub-Image")
+        self.btn_place_subimage = QPushButton("Place Overlay")
+        self.btn_place_subimage.setCursor(Qt.PointingHandCursor)
         self.btn_place_subimage.setStyleSheet("""
             QPushButton {
-                background-color: #1565c0; color: white; padding: 8px; border-radius: 4px; border: 1px solid #0d47a1;
+                background-color: #ffffff;
+                color: #202020;
+                padding: 6px 14px;
+                border-radius: 4px;
+                border: 1px solid #d1d1d1;
+                font-size: 12px;
+                font-weight: 400;
             }
-            QPushButton:hover { background-color: #1976d2; }
-            QPushButton:disabled { background-color: #555; color: #888; }
+            QPushButton:hover {
+                background-color: #f5f5f5;
+                border-color: #b1b1b1;
+            }
+            QPushButton:disabled {
+                background-color: #f3f3f3;
+                color: #a1a1a1;
+                border-color: #e1e1e1;
+            }
         """)
         self.btn_place_subimage.setEnabled(False)
         self.btn_place_subimage.clicked.connect(self.place_sub_image)
-        sub_image_row.addWidget(self.btn_place_subimage)
+        secondary_row.addWidget(self.btn_place_subimage)
         
-        center_layout.addLayout(sub_image_row)
-
-
-        # Zoom Controls
-        zoom_layout = QHBoxLayout()
+        secondary_row.addStretch()
         
-        btn_zoom_out = QPushButton("−")  # Minus sign
-        btn_zoom_out.setFixedSize(40, 40)
+        # Zoom controls
+        zoom_group = QHBoxLayout()
+        zoom_group.setSpacing(6)
+        
+        btn_zoom_out = QPushButton("−")
+        btn_zoom_out.setFixedSize(32, 32)
+        btn_zoom_out.setCursor(Qt.PointingHandCursor)
         btn_zoom_out.setStyleSheet("""
             QPushButton {
-                background-color: #444; color: white; font-size: 20px; 
-                font-weight: bold; border-radius: 4px; border: 1px solid #555;
+                background-color: #ffffff;
+                color: #202020;
+                font-size: 16px;
+                font-weight: 400;
+                border-radius: 4px;
+                border: 1px solid #d1d1d1;
             }
-            QPushButton:hover { background-color: #555; }
+            QPushButton:hover {
+                background-color: #f5f5f5;
+                border-color: #b1b1b1;
+            }
         """)
         btn_zoom_out.clicked.connect(self.canvas.zoom_out)
-        zoom_layout.addWidget(btn_zoom_out)
+        zoom_group.addWidget(btn_zoom_out)
         
         btn_reset_zoom = QPushButton("Reset")
+        btn_reset_zoom.setCursor(Qt.PointingHandCursor)
         btn_reset_zoom.setStyleSheet("""
             QPushButton {
-                background-color: #444; color: white; padding: 8px 16px; 
-                border-radius: 4px; border: 1px solid #555;
+                background-color: #ffffff;
+                color: #202020;
+                padding: 6px 12px;
+                border-radius: 4px;
+                border: 1px solid #d1d1d1;
+                font-size: 12px;
+                font-weight: 400;
             }
-            QPushButton:hover { background-color: #555; }
+            QPushButton:hover {
+                background-color: #f5f5f5;
+                border-color: #b1b1b1;
+            }
         """)
         btn_reset_zoom.clicked.connect(self.canvas.reset_zoom)
-        zoom_layout.addWidget(btn_reset_zoom)
+        zoom_group.addWidget(btn_reset_zoom)
         
-        btn_zoom_in = QPushButton("+")  # Plus sign
-        btn_zoom_in.setFixedSize(40, 40)
+        btn_zoom_in = QPushButton("+")
+        btn_zoom_in.setFixedSize(32, 32)
+        btn_zoom_in.setCursor(Qt.PointingHandCursor)
         btn_zoom_in.setStyleSheet("""
             QPushButton {
-                background-color: #444; color: white; font-size: 20px; 
-                font-weight: bold; border-radius: 4px; border: 1px solid #555;
+                background-color: #ffffff;
+                color: #202020;
+                font-size: 16px;
+                font-weight: 400;
+                border-radius: 4px;
+                border: 1px solid #d1d1d1;
             }
-            QPushButton:hover { background-color: #555; }
+            QPushButton:hover {
+                background-color: #f5f5f5;
+                border-color: #b1b1b1;
+            }
         """)
         btn_zoom_in.clicked.connect(self.canvas.zoom_in)
-        zoom_layout.addWidget(btn_zoom_in)
+        zoom_group.addWidget(btn_zoom_in)
         
-        center_layout.addLayout(zoom_layout)
+        secondary_row.addLayout(zoom_group)
+        toolbar_layout.addLayout(secondary_row)
+        
+        center_layout.addWidget(toolbar_container)
 
         
         # --- 3. Right Panel: Storyboard ---
         right_container = QWidget()
         right_layout = QVBoxLayout(right_container)
-        right_layout.setContentsMargins(15, 15, 15, 15)
-        right_layout.setSpacing(12)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(0)
         right_container.setStyleSheet("""
             QWidget {
-                background-color: #1e1e1e;
+                background-color: #f3f3f3;
+                border-left: 1px solid #e1e1e1;
             }
         """)
         
-        # Header
-        lbl_settings = QLabel("✦ Storyboard")
-        lbl_settings.setStyleSheet("""
-            font-size: 20px; 
-            font-weight: bold; 
-            color: #5a9bd6;
-            padding: 5px 0;
+        # Header section
+        header_section = QWidget()
+        header_section.setStyleSheet("""
+            QWidget {
+                background-color: #ffffff;
+                border-bottom: 1px solid #e1e1e1;
+            }
         """)
-        right_layout.addWidget(lbl_settings)
+        header_layout = QVBoxLayout(header_section)
+        header_layout.setContentsMargins(20, 16, 20, 16)
+        header_layout.setSpacing(12)
         
-        # === Snippets Section ===
-        snippets_header = QWidget()
-        snippets_header_layout = QHBoxLayout(snippets_header)
-        snippets_header_layout.setContentsMargins(0, 0, 0, 0)
+        # Main title
+        lbl_title = QLabel("Storyboard")
+        lbl_title.setStyleSheet("""
+            QLabel {
+                font-size: 20px;
+                font-weight: 600;
+                color: #202020;
+                padding: 0;
+            }
+        """)
+        header_layout.addWidget(lbl_title)
         
-        lbl_snippets = QLabel("Scenes")
-        lbl_snippets.setStyleSheet("font-size: 12px; font-weight: bold; color: #888; text-transform: uppercase;")
-        snippets_header_layout.addWidget(lbl_snippets)
+        # Scenes section header
+        scenes_header = QHBoxLayout()
+        scenes_header.setContentsMargins(0, 0, 0, 0)
         
-        snippets_header_layout.addStretch()
+        lbl_snippets = QLabel("SCENES")
+        lbl_snippets.setStyleSheet("""
+            QLabel {
+                font-size: 11px;
+                font-weight: 600;
+                color: #666666;
+                letter-spacing: 0.5px;
+            }
+        """)
+        scenes_header.addWidget(lbl_snippets)
+        scenes_header.addStretch()
         
         # Snippet count badge
         self.lbl_snippet_count = QLabel("0")
         self.lbl_snippet_count.setFixedSize(24, 24)
         self.lbl_snippet_count.setAlignment(Qt.AlignCenter)
         self.lbl_snippet_count.setStyleSheet("""
-            background-color: #3a3a3a;
-            color: #888;
-            border-radius: 12px;
-            font-size: 11px;
-            font-weight: bold;
+            QLabel {
+                background-color: #0078d4;
+                color: white;
+                border-radius: 12px;
+                font-size: 11px;
+                font-weight: 600;
+            }
         """)
-        snippets_header_layout.addWidget(self.lbl_snippet_count)
+        scenes_header.addWidget(self.lbl_snippet_count)
         
-        right_layout.addWidget(snippets_header)
+        header_layout.addLayout(scenes_header)
+        right_layout.addWidget(header_section)
         
-        # Scrollable container for snippet buttons - now flexible height
+        # Scrollable container for snippets
         snippets_scroll = QScrollArea()
         snippets_scroll.setWidgetResizable(True)
         snippets_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        snippets_scroll.setFrameShape(QFrame.NoFrame)
         snippets_scroll.setStyleSheet("""
-            QScrollArea { 
-                border: none; 
+            QScrollArea {
+                border: none;
                 background-color: transparent;
             }
             QScrollBar:vertical {
-                background-color: #2a2a2a;
-                width: 8px;
-                border-radius: 4px;
+                background-color: #f3f3f3;
+                width: 12px;
+                border-radius: 0px;
+                margin: 0;
             }
             QScrollBar::handle:vertical {
-                background-color: #4a4a4a;
-                border-radius: 4px;
+                background-color: #c1c1c1;
+                border-radius: 6px;
                 min-height: 30px;
+                margin: 2px;
             }
             QScrollBar::handle:vertical:hover {
-                background-color: #5a9bd6;
+                background-color: #a1a1a1;
             }
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
                 height: 0;
+                border: none;
             }
         """)
         
         self.snippets_container = QWidget()
         self.snippets_container.setStyleSheet("background-color: transparent;")
         self.snippets_layout = QVBoxLayout(self.snippets_container)
-        self.snippets_layout.setContentsMargins(0, 0, 0, 0)
-        self.snippets_layout.setSpacing(8)
+        self.snippets_layout.setContentsMargins(16, 16, 16, 16)
+        self.snippets_layout.setSpacing(12)
         self.snippets_layout.addStretch()
         
         snippets_scroll.setWidget(self.snippets_container)
-        right_layout.addWidget(snippets_scroll, 1)  # Takes remaining space
+        right_layout.addWidget(snippets_scroll, 1)
         
         # Connect canvas signals
         self.canvas.snippet_created.connect(self.on_snippet_created)
         self.snippet_buttons = []  # Track buttons
         
-        # Generate Button - fixed at bottom
-        self.btn_generate = QPushButton("✨ Generate Video")
-        self.btn_generate.setFixedHeight(50)
+        # Generate Button container
+        generate_container = QWidget()
+        generate_container.setStyleSheet("""
+            QWidget {
+                background-color: #ffffff;
+                border-top: 1px solid #e1e1e1;
+            }
+        """)
+        generate_layout = QVBoxLayout(generate_container)
+        generate_layout.setContentsMargins(20, 16, 20, 16)
+        
+        self.btn_generate = QPushButton("Generate Video")
+        self.btn_generate.setFixedHeight(44)
         self.btn_generate.setCursor(Qt.PointingHandCursor)
         self.btn_generate.setStyleSheet("""
             QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #5a9bd6, stop:1 #4a8bc6);
-                color: white; 
-                font-size: 15px; 
-                border-radius: 8px; 
-                font-weight: bold;
+                background-color: #0078d4;
+                color: white;
+                font-size: 14px;
+                font-weight: 400;
+                border-radius: 4px;
                 border: none;
             }
-            QPushButton:hover { 
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #6aabf6, stop:1 #5a9bd6);
+            QPushButton:hover {
+                background-color: #106ebe;
             }
             QPushButton:pressed {
-                background: #4a8bc6;
+                background-color: #005a9e;
             }
-            QPushButton:disabled { 
-                background-color: #3a3a3a;
-                color: #666;
+            QPushButton:disabled {
+                background-color: #e1e1e1;
+                color: #a1a1a1;
             }
         """)
         self.btn_generate.clicked.connect(self.generate_video)
-        right_layout.addWidget(self.btn_generate)
+        generate_layout.addWidget(self.btn_generate)
+        
+        right_layout.addWidget(generate_container)
         
         # Add to Main Layout with Ratios
         # Left (1), Center (2), Right (1)
@@ -384,44 +543,48 @@ class MainWindow(QMainWindow):
         menubar = self.menuBar()
         menubar.setStyleSheet("""
             QMenuBar {
-                background-color: #2b2b2b;
-                color: white;
-                padding: 5px;
+                background-color: #ffffff;
+                color: #202020;
+                padding: 2px;
                 font-size: 13px;
+                border-bottom: 1px solid #e1e1e1;
             }
             QMenuBar::item {
                 background-color: transparent;
-                padding: 8px 15px;
-                border-radius: 4px;
+                padding: 6px 12px;
+                border-radius: 2px;
             }
             QMenuBar::item:selected {
-                background-color: #444;
+                background-color: #e8f4f8;
             }
             QMenu {
-                background-color: #333;
-                color: white;
-                border: 1px solid #555;
+                background-color: #ffffff;
+                color: #202020;
+                border: 1px solid #d1d1d1;
+                padding: 4px;
             }
             QMenu::item {
-                padding: 8px 25px 8px 15px;
+                padding: 6px 32px 6px 16px;
+                border-radius: 2px;
             }
             QMenu::item:selected {
-                background-color: #5a9bd6;
+                background-color: #0078d4;
+                color: white;
             }
             QMenu::indicator {
-                width: 18px;
-                height: 18px;
+                width: 16px;
+                height: 16px;
                 margin-left: 5px;
             }
             QMenu::indicator:checked {
                 image: none;
-                background-color: #5a9bd6;
-                border-radius: 3px;
+                background-color: #0078d4;
+                border-radius: 2px;
             }
         """)
         
         # Voice Menu
-        voice_menu = menubar.addMenu("🎙 Voice")
+        voice_menu = menubar.addMenu("Voice")
         
         # Create action group for exclusive selection
         self.voice_action_group = QActionGroup(self)
@@ -442,11 +605,43 @@ class MainWindow(QMainWindow):
             voice_menu.addAction(action)
         
         # Files Menu
-        files_menu = menubar.addMenu("📁 Files")
+        files_menu = menubar.addMenu("File")
         
-        upload_json_action = QAction("Upload JSON", self)
+        upload_json_action = QAction("Import JSON", self)
         upload_json_action.triggered.connect(self._on_upload_json)
         files_menu.addAction(upload_json_action)
+
+        # View Menu (Theme)
+        view_menu = menubar.addMenu("View")
+        theme_menu = view_menu.addMenu("Theme")
+
+        self.theme_action_group = QActionGroup(self)
+        self.theme_action_group.setExclusive(True)
+
+        action_dark = QAction("Dark", self)
+        action_dark.setCheckable(True)
+        action_dark.setChecked(self.current_theme == "dark")
+        action_dark.triggered.connect(lambda checked: self._set_theme("dark"))
+        self.theme_action_group.addAction(action_dark)
+        theme_menu.addAction(action_dark)
+
+        action_light = QAction("Light", self)
+        action_light.setCheckable(True)
+        action_light.setChecked(self.current_theme == "light")
+        action_light.triggered.connect(lambda checked: self._set_theme("light"))
+        self.theme_action_group.addAction(action_light)
+        theme_menu.addAction(action_light)
+
+    def _set_theme(self, theme: ThemeName):
+        if theme == self.current_theme:
+            return
+        self.current_theme = theme
+        app = QApplication.instance()
+        if app is not None:
+            apply_theme(app, theme)
+        # Persist
+        self.settings_store.save(AppSettings(theme=theme))
+        self.log_panel.log(f"Theme set to: {theme}")
     
     def _on_voice_selected(self, voice):
         """Handle voice selection from menu."""
@@ -510,7 +705,7 @@ class MainWindow(QMainWindow):
                     widget.text_changed.connect(self._on_pending_text_changed)
                     
                     # Mark as unassigned visually
-                    widget.lbl_title.setText(f"📍 Snippet {i+1}")
+                    widget.lbl_title.setText(f"Snippet {i+1}")
                     widget.lbl_preview.setText("Click to assign region")
                     
                     self.snippets_layout.addWidget(widget)
@@ -747,7 +942,7 @@ class MainWindow(QMainWindow):
                 widget_idx = self.selected_pending_idx
                 if widget_idx < len(self.snippet_widgets):
                     widget = self.snippet_widgets[widget_idx]
-                    widget.lbl_title.setText(f"✓ Snippet {widget_idx + 1}")
+                    widget.lbl_title.setText(f"Snippet {widget_idx + 1}")
                     widget.set_assigned_style(True)
                     widget.lbl_preview.setText(pending['text'][:50] + "..." if len(pending['text']) > 50 else pending['text'])
                     # Reconnect signals to use canvas index

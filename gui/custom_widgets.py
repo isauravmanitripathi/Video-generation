@@ -10,27 +10,27 @@ class LogPanel(QWidget):
         super().__init__()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        
-        lbl_title = QLabel("Activity Logs")
-        lbl_title.setStyleSheet("font-weight: bold; color: #ccc; margin-bottom: 5px;")
-        layout.addWidget(lbl_title)
+        layout.setSpacing(0)
         
         self.text_edit = QTextEdit()
         self.text_edit.setReadOnly(True)
         self.text_edit.setStyleSheet("""
             QTextEdit {
-                background-color: #1e1e1e;
-                color: #00ff00;
-                font-family: Consolas, Monaco, monospace;
+                background-color: #ffffff;
+                color: #202020;
+                font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
                 font-size: 11px;
-                border: 1px solid #333;
+                border: none;
+                padding: 12px;
+                line-height: 1.5;
             }
         """)
         layout.addWidget(self.text_edit)
         
     def log(self, message):
         timestamp = datetime.now().strftime("%H:%M:%S")
-        self.text_edit.append(f"[{timestamp}] {message}")
+        formatted_message = f'<span style="color: #666666;">[{timestamp}]</span> <span style="color: #202020;">{message}</span>'
+        self.text_edit.append(formatted_message)
         self.text_edit.verticalScrollBar().setValue(
             self.text_edit.verticalScrollBar().maximum()
         )
@@ -252,7 +252,7 @@ class ImageCanvas(QWidget):
         painter.setRenderHint(QPainter.SmoothPixmapTransform)
         
         # 1. Draw Background
-        painter.fillRect(self.rect(), QColor("#121212"))
+        painter.fillRect(self.rect(), QColor("#fafafa"))
         
         # 2. Calculate Viewport (Canvas) Size & Position
         w = self.width() - 40 # Margin
@@ -271,7 +271,7 @@ class ImageCanvas(QWidget):
         self.viewport_rect = QRect(vp_x, vp_y, vp_w, vp_h)
         
         # 3. Draw Viewport Background
-        painter.fillRect(self.viewport_rect, QColor("black"))
+        painter.fillRect(self.viewport_rect, QColor("#000000"))
         
         # 4. Draw Image (Aspect Fill / Cover)
         if self.source_pixmap:
@@ -356,7 +356,7 @@ class ImageCanvas(QWidget):
                     self.sub_image_pixmap.width(),
                     self.sub_image_pixmap.height()
                 )
-                pen = QPen(QColor("#2ecc71"), 3, Qt.DashLine)
+                pen = QPen(QColor("#107c10"), 3, Qt.DashLine)
                 painter.setPen(pen)
                 painter.setBrush(Qt.NoBrush)
                 painter.drawRect(sub_rect)
@@ -364,7 +364,7 @@ class ImageCanvas(QWidget):
                 # Draw resize handles at corners
                 handle_size = self.resize_handle_size
                 handles = self._get_sub_image_resize_handles()
-                painter.setBrush(QColor("#2ecc71"))
+                painter.setBrush(QColor("#107c10"))
                 painter.setPen(QPen(QColor("#fff"), 2))
                 for handle_name, handle_rect in handles.items():
                     painter.drawRect(handle_rect)
@@ -378,7 +378,7 @@ class ImageCanvas(QWidget):
             painter.restore()
         
         # 5. Draw Viewport Border
-        pen = QPen(QColor("#5a9bd6"), 2)
+        pen = QPen(QColor("#0078d4"), 2)
         painter.setPen(pen)
         painter.drawRect(self.viewport_rect)
         
@@ -800,12 +800,13 @@ class SnippetItemWidget(QWidget):
         # Main styling
         self.setStyleSheet(f"""
             SnippetItemWidget {{
-                background-color: #252525;
-                border-radius: 8px;
-                border: 1px solid #3a3a3a;
+                background-color: #ffffff;
+                border-radius: 4px;
+                border: 1px solid #d1d1d1;
             }}
             SnippetItemWidget:hover {{
-                border: 1px solid #4a4a4a;
+                border: 1px solid #b1b1b1;
+                background-color: #fafafa;
             }}
         """)
         
@@ -833,13 +834,13 @@ class SnippetItemWidget(QWidget):
         
         # Title
         self.lbl_title = QLabel(f"Snippet {idx + 1}")
-        self.lbl_title.setStyleSheet("font-size: 13px; font-weight: bold; color: #fff;")
+        self.lbl_title.setStyleSheet("font-size: 14px; font-weight: 600; color: #202020;")
         info_layout.addWidget(self.lbl_title)
         
         # Preview text (truncated)
         preview = text[:50] + "..." if len(text) > 50 else text if text else "No script yet"
         self.lbl_preview = QLabel(preview)
-        self.lbl_preview.setStyleSheet("font-size: 11px; color: #888;")
+        self.lbl_preview.setStyleSheet("font-size: 12px; color: #666666;")
         self.lbl_preview.setWordWrap(False)
         info_layout.addWidget(self.lbl_preview)
         
@@ -847,19 +848,19 @@ class SnippetItemWidget(QWidget):
         
         # Expand button
         self.btn_expand = QPushButton("▼")
-        self.btn_expand.setFixedSize(32, 32)
+        self.btn_expand.setFixedSize(28, 28)
         self.btn_expand.setCursor(Qt.PointingHandCursor)
         self.btn_expand.setStyleSheet("""
             QPushButton {
-                background-color: transparent;
-                color: #888;
-                border: 1px solid #444;
+                background-color: #ffffff;
+                color: #202020;
+                border: 1px solid #d1d1d1;
                 border-radius: 4px;
                 font-size: 10px;
             }
             QPushButton:hover {
-                background-color: #3a3a3a;
-                color: #fff;
+                background-color: #f5f5f5;
+                border-color: #b1b1b1;
             }
         """)
         self.btn_expand.clicked.connect(self.toggle_expand)
@@ -867,21 +868,21 @@ class SnippetItemWidget(QWidget):
         
         # Delete button
         self.btn_delete = QPushButton("×")
-        self.btn_delete.setFixedSize(32, 32)
+        self.btn_delete.setFixedSize(28, 28)
         self.btn_delete.setCursor(Qt.PointingHandCursor)
         self.btn_delete.setStyleSheet("""
             QPushButton {
-                background-color: transparent;
-                color: #888;
-                border: 1px solid #444;
+                background-color: #ffffff;
+                color: #202020;
+                border: 1px solid #d1d1d1;
                 border-radius: 4px;
                 font-size: 16px;
                 font-weight: bold;
             }
             QPushButton:hover {
-                background-color: #d32f2f;
+                background-color: #dc3545;
                 color: white;
-                border-color: #d32f2f;
+                border-color: #dc3545;
             }
         """)
         self.btn_delete.clicked.connect(lambda: self.deleted.emit(self.idx))
@@ -910,16 +911,16 @@ class SnippetItemWidget(QWidget):
         self.txt_script.setMinimumHeight(80)
         self.txt_script.setStyleSheet("""
             QTextEdit {
-                background-color: #1e1e1e;
-                color: #ddd;
-                border: 1px solid #444;
-                border-radius: 6px;
+                background-color: #ffffff;
+                color: #202020;
+                border: 1px solid #d1d1d1;
+                border-radius: 4px;
                 padding: 10px;
                 font-size: 12px;
-                line-height: 1.4;
+                line-height: 1.5;
             }
             QTextEdit:focus {
-                border: 1px solid #5a9bd6;
+                border: 1px solid #0078d4;
             }
         """)
         self.txt_script.setText(text)
@@ -968,11 +969,11 @@ class SnippetItemWidget(QWidget):
     def set_assigned_style(self, assigned):
         """Update style based on assignment status."""
         if assigned:
-            self.color_bar.setStyleSheet(f"background-color: #2ecc71; border-radius: 2px;")
-            self.lbl_title.setStyleSheet("font-size: 13px; font-weight: bold; color: #2ecc71;")
+            self.color_bar.setStyleSheet(f"background-color: #107c10; border-radius: 2px;")
+            self.lbl_title.setStyleSheet("font-size: 14px; font-weight: 600; color: #107c10;")
         else:
             self.color_bar.setStyleSheet(f"background-color: {self.color_hex}; border-radius: 2px;")
-            self.lbl_title.setStyleSheet("font-size: 13px; font-weight: bold; color: #fff;")
+            self.lbl_title.setStyleSheet("font-size: 14px; font-weight: 600; color: #202020;")
 
 
 
@@ -987,9 +988,9 @@ class SubImageWidget(QWidget):
         
         self.setStyleSheet("""
             SubImageWidget {
-                background-color: #2a3a2a;
-                border-radius: 8px;
-                border: 1px solid #4caf50;
+                background-color: #ffffff;
+                border-radius: 4px;
+                border: 1px solid #d1d1d1;
             }
         """)
         
@@ -1009,7 +1010,8 @@ class SubImageWidget(QWidget):
         header.addWidget(thumb)
         
         self.lbl_title = QLabel(f"�� {sub_image_id}")
-        self.lbl_title.setStyleSheet("font-size: 12px; font-weight: bold; color: #4caf50;")
+        self.lbl_title.setText(f"Overlay: {sub_image_id}")
+        self.lbl_title.setStyleSheet("font-size: 12px; font-weight: 600; color: #107c10;")
         header.addWidget(self.lbl_title, 1)
         
         btn_del = QPushButton("×")
@@ -1023,11 +1025,28 @@ class SubImageWidget(QWidget):
         # After snip combo
         from PyQt5.QtWidgets import QComboBox, QCheckBox
         row = QHBoxLayout()
-        row.addWidget(QLabel("After:"))
+        label_after = QLabel("After:")
+        label_after.setStyleSheet("font-size: 11px; color: #9ca3af;")
+        row.addWidget(label_after)
         self.combo = QComboBox()
-        self.combo.setStyleSheet("QComboBox { background: #333; color: white; border: 1px solid #555; padding: 3px; border-radius: 3px; }")
+        self.combo.setStyleSheet("""
+            QComboBox {
+                background-color: #ffffff;
+                color: #202020;
+                border: 1px solid #d1d1d1;
+                padding: 4px 10px;
+                border-radius: 4px;
+                font-size: 11px;
+            }
+            QComboBox:hover {
+                border-color: #b1b1b1;
+            }
+            QComboBox::drop-down {
+                border: none;
+            }
+        """)
         for i in range(max(1, total_snips)):
-            self.combo.addItem(f"Snip {i+1}", i)
+            self.combo.addItem(f"Scene {i+1}", i)
         self.combo.setCurrentIndex(min(after_snip, self.combo.count()-1))
         self.combo.currentIndexChanged.connect(self._emit)
         row.addWidget(self.combo, 1)
@@ -1035,7 +1054,24 @@ class SubImageWidget(QWidget):
         
         # Persistent checkbox
         self.chk = QCheckBox("Keep until video ends")
-        self.chk.setStyleSheet("color: #aaa; font-size: 11px;")
+        self.chk.setStyleSheet("""
+            QCheckBox {
+                color: #202020;
+                font-size: 11px;
+                spacing: 8px;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+                border: 2px solid #666666;
+                border-radius: 2px;
+                background-color: transparent;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #0078d4;
+                border-color: #0078d4;
+            }
+        """)
         self.chk.stateChanged.connect(self._emit)
         layout.addWidget(self.chk)
         
@@ -1043,7 +1079,19 @@ class SubImageWidget(QWidget):
         self.txt = QTextEdit()
         self.txt.setPlaceholderText("Voice script...")
         self.txt.setMaximumHeight(50)
-        self.txt.setStyleSheet("QTextEdit { background: #1e1e1e; color: #ddd; border: 1px solid #444; border-radius: 4px; padding: 5px; font-size: 11px; }")
+        self.txt.setStyleSheet("""
+            QTextEdit {
+                background-color: #ffffff;
+                color: #202020;
+                border: 1px solid #d1d1d1;
+                border-radius: 4px;
+                padding: 6px;
+                font-size: 11px;
+            }
+            QTextEdit:focus {
+                border-color: #0078d4;
+            }
+        """)
         self.txt.textChanged.connect(self._emit)
         layout.addWidget(self.txt)
     
