@@ -1,8 +1,57 @@
 {
-  "title": "Test Video Project",
+  "title": "Indian Constitution Schedules: TEARS OF OLD PM",
   "snippets": [
-    {"id": "1", "text": "Welcome to this demonstration video about Python programming."},
-    {"id": "2", "text": "Here we can see the basic syntax structure of the language."},
-    {"id": "3", "text": "Notice how clean and readable Python code is compared to other languages."}
+    {
+      "id": "1",
+      "text": "Today we are going to learn about the Indian Constitution Schedules using the trick \"TEARS OF OLD PM\", alright?"
+    },
+    {
+      "id": "2",
+      "text": "T - 1st Schedule: Territories. This schedule defines the physical territory of India. It lists the names and territorial jurisdictions of all the States and the Union Territories that make up the Indian Union. Whenever a new state is formed or a boundary is changed, this schedule must be amended."
+    },
+    {
+      "id": "3",
+      "text": "E - 2nd Schedule: Emoluments. This schedule deals with financial matters for high-ranking constitutional authorities. It details the provisions relating to the emoluments (salaries), allowances, privileges, and perks for officials such as the President of India, Governors of States, the Speaker of the Lok Sabha, Judges of the Supreme Court and High Courts, and the Comptroller and Auditor General (CAG)."
+    },
+    {
+      "id": "4",
+      "text": "A - 3rd Schedule: Affirmations and Oaths. Before assuming their seats or offices, certain candidates and officials must take a solemn pledge. This schedule contains the exact forms of Oaths or Affirmations that must be taken by Union and State Ministers, Members of Parliament (MPs), Members of Legislative Assemblies (MLAs), and Judges to uphold the Constitution and uphold the sovereignty of India."
+    },
+    {
+      "id": "5",
+      "text": "R - 4th Schedule: Rajya Sabha. This schedule focuses on the Upper House of Parliament, the Rajya Sabha (Council of States). It specifies the allocation of seats to each State and Union Territory in the Rajya Sabha based largely on their respective populations."
+    },
+    {
+      "id": "6",
+      "text": "S - 5th Schedule: Scheduled Areas. This schedule is designed to protect the interests of tribal communities in central India. It contains special provisions for the administration and control of \"Scheduled Areas\" and \"Scheduled Tribes\" in various states, excluding the four northeastern states covered in the next schedule. The Governor has special powers regarding these areas."
+    },
+    {
+      "id": "7",
+      "text": "O - 6th Schedule: Other Tribal Areas. This schedule provides for the administration of tribal areas specifically in the four northeastern states of Assam, Meghalaya, Tripura, and Mizoram (remember the mnemonic AMTM). It allows for the creation of Autonomous District Councils to give these tribal populations greater self-governance."
+    },
+    {
+      "id": "8",
+      "text": "F - 7th Schedule: Federal Structure. This schedule is the backbone of India's federal system. It defines the division of powers between the Union (Centre) and the States through three distinct lists: The Union List (areas where only the Centre makes laws), the State List (areas where States make laws), and the Concurrent List (areas where both can make laws)."
+    },
+    {
+      "id": "9",
+      "text": "O - 8th Schedule: Official Languages. This schedule lists the languages that are officially recognized by the Constitution of India. Initially, there were 14 languages, but through various amendments, there are currently 22 scheduled languages recognized, including Hindi, Bengali, Tamil, Urdu, and Sanskrit."
+    },
+    {
+      "id": "10",
+      "text": "L - 9th Schedule: Land Reforms. Originally added by the First Amendment in 1951, this schedule was created to protect land reform laws and the abolition of the Zamindari system from being challenged in courts on the grounds of violating fundamental rights. While initially intended to be immune to judicial review, the Supreme Court has since ruled that laws placed here can be reviewed if they violate the basic structure of the Constitution."
+    },
+    {
+      "id": "11",
+      "text": "D - 10th Schedule: Defection. Popularly known as the \"Anti-Defection Law,\" this schedule was added by the 52nd Amendment in 1985. It lays down the process and grounds for disqualifying members of Parliament or State Legislatures if they defect from one political party to another after being elected."
+    },
+    {
+      "id": "12",
+      "text": "P - 11th Schedule: Panchayat. Added by the 73rd Amendment Act of 1992, this schedule formalizes rural local self-government. It specifies the 29 matters (such as agriculture, rural housing, and drinking water) over which Panchayats have powers, authority, and responsibilities to manage local development."
+    },
+    {
+      "id": "13",
+      "text": "M - 12th Schedule: Municipality. Added by the 74th Amendment Act of 1992, this schedule formalizes urban local self-government. It lists the 18 functional items (such as urban planning, public health, and solid waste management) that fall under the purview of Municipalities to manage towns and cities."
+    }
   ]
 }
